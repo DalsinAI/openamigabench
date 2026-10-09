@@ -44,6 +44,7 @@ struct ProxyBase {
     const char *private_name;       /* "OpenUp.original.workbench.library" */
     const struct spy_func *funcs;   /* each entry's name and what the spy copies (wbspy reads the names) */
     LONG error;                     /* why the original couldn't be had (IoErr, or ours below) */
+    struct Library *orig_linked;    /* the original, made and linked, before it is opened */
 };
 
 /* Our own error codes in ProxyBase.error (above DOS's). */
@@ -59,16 +60,18 @@ struct ProxyBase {
 #define SPY_RAW 32
 #define SPY_TASK 16
 
-enum { SPY_BEFORE = 1, SPY_AFTER = 2 };
-
+/* One call: written as it is made, completed with its result when it
+ * returns (if its slot hasn't been reused by then). */
 struct spy_entry {
     ULONG seq;                      /* 0 when the slot was never written */
+    ULONG time_hi, time_lo;         /* the EClock when it was made: both libraries' calls merge by it */
     struct Task *task;
     UBYTE idx;                      /* the entry: 0 is the first function (-30) */
-    UBYTE phase;                    /* SPY_BEFORE, SPY_AFTER */
+    UBYTE returned;                 /* 1 once the result is in */
     UBYTE ntags;
     UBYTE nraw;
-    ULONG regs[8];                  /* before: d0 d1 d2 a0 a1 a2 a3 a4; after: d0 (the result) */
+    ULONG regs[8];                  /* d0 d1 d2 a0 a1 a2 a3 a4 as the call was made */
+    ULONG result;                   /* d0 when it returned */
     char task_name[SPY_TASK];
     char str[SPY_STR];              /* the call's string argument, when it has one */
     ULONG tags[SPY_TAGS * 2];       /* its tag list, when it has one (tag, data) */
@@ -77,13 +80,19 @@ struct spy_entry {
 
 struct spy_ring {
     ULONG magic;                    /* SPY_MAGIC */
-    ULONG count;                    /* entries in the ring */
+    ULONG count;                    /* calls the ring keeps */
     ULONG next;                     /* the next slot to write */
-    ULONG seq;                      /* the last sequence number given */
+    ULONG seq;                      /* the last sequence number given: the calls recorded */
     ULONG bytes;                    /* the allocation, for FreeVec's sake (AllocVec) */
+    ULONG eclock_freq;              /* EClock ticks a second, 0 when there is no clock */
     struct spy_entry e[1];
 };
-#define SPY_MAGIC 0x53505931UL      /* "SPY1" */
+#define SPY_MAGIC 0x53505932UL      /* "SPY2" */
+
+/* What proxy_spy_before gives the stub, and the stub gives back with the
+ * result: the slot, and the low bits of the call's sequence number, so a
+ * slot reused meanwhile is left alone. 0: nothing recorded. */
+#define SPY_TOKEN(seq, slot) (0x80000000UL | (((seq) & 0x7FFFUL) << 16) | (slot))
 
 /* What the spy copies for each entry (indexes into the saved registers:
  * 0-7 are d0-d7, 8-14 are a0-a6). -1: nothing. */
@@ -105,8 +114,8 @@ struct spy_func {
 #define R_A4 12
 
 /* Called by the stubs, in the caller's task, with its stack: small. */
-void proxy_spy_before(LONG idx, ULONG *regs);
-void proxy_spy_after(LONG idx, ULONG result, struct ProxyBase *base);
+ULONG proxy_spy_before(LONG idx, ULONG *regs);
+void proxy_spy_after(LONG idx, ULONG token, ULONG result, struct ProxyBase *base);
 
 /* The ring for a library: a new one of n entries (AllocVec, MEMF_PUBLIC). */
 struct spy_ring *proxy_spy_new(ULONG n);

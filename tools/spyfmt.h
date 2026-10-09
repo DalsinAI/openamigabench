@@ -8,13 +8,15 @@
 #include <stdint.h>
 
 typedef struct spy_line {
-    uint32_t seq;
+    uint32_t seq;               /* the call's number in its library */
+    long time_us;               /* microseconds since the first call saved; -1 when there is no clock */
     const char *task;           /* the caller's name */
     const char *lib;            /* "workbench", "icon" */
     const char *func;           /* "WBConfig" */
     int offset;                 /* -84 */
-    int after;                  /* 0: the call, 1: its result */
-    uint32_t regs[8];           /* d0 d1 d2 a0 a1 a2 a3 a4; after: regs[0] is the result */
+    uint32_t regs[8];           /* d0 d1 d2 a0 a1 a2 a3 a4 as the call was made */
+    int returned;               /* 1: result holds what came back */
+    uint32_t result;
     const char *str;            /* the string argument, or "" */
     int ntags;
     const uint32_t *tags;       /* ntags pairs */
@@ -22,7 +24,9 @@ typedef struct spy_line {
     const uint8_t *raw;
 } spy_line;
 
-/* Writes the line (no newline) into out, at most n bytes with the 0. Returns its length. */
+/* Writes the line (no newline) into out, at most n bytes with the 0. Returns
+ * its length. Strings are written with C's escapes, so one call is always
+ * one line, whatever its strings hold. */
 int spy_format(char *out, int n, const spy_line *l);
 
 #endif

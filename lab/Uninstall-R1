@@ -11,7 +11,16 @@ If NOT EXISTS SYS:Storage/OpenUp-Superseded/icon.library
   Echo "Hyperion's icon.library isn't in SYS:Storage/OpenUp-Superseded."
   Quit 20
 EndIf
-Copy SYS:Storage/OpenUp-Superseded/workbench.library SYS:Storage/OpenUp-Superseded/icon.library LIBS: CLONE QUIET
+Copy SYS:Storage/OpenUp-Superseded/workbench.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying Hyperion's workbench.library back failed: LIBS: may still have ours. Don't reboot until it is back."
+  Quit 20
+EndIf
+Copy SYS:Storage/OpenUp-Superseded/icon.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying Hyperion's icon.library back failed: LIBS: may still have ours. Don't reboot until it is back."
+  Quit 20
+EndIf
 If EXISTS C:wbspy
   Delete C:wbspy QUIET
 EndIf

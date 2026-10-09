@@ -5,7 +5,13 @@
 ; live one. Run it from the drawer that holds the build. Uninstall-R1 puts
 ; Hyperion's back.
 ; MIT, Copyright (c) 2026 Dalsin Limited.
+; FailAt 21: every failure is caught below, with what to do about it
 FailAt 21
+CPU >NIL: CHECK 68020
+If WARN
+  Echo "OpenBench needs a 68020 or better. Nothing was installed."
+  Quit 20
+EndIf
 If NOT EXISTS workbench.library
   Echo "Run Install-R1 from the drawer that holds OpenBench's build."
   Quit 20
@@ -17,10 +23,18 @@ EndIf
 Search >NIL: LIBS:workbench.library "OpenBench" QUIET
 If WARN
   Copy LIBS:workbench.library SYS:Storage/OpenUp-Superseded/ CLONE QUIET
+  If ERROR
+    Echo "Keeping Hyperion's workbench.library failed. Nothing was installed."
+    Quit 20
+  EndIf
 EndIf
 Search >NIL: LIBS:icon.library "OpenBench" QUIET
 If WARN
   Copy LIBS:icon.library SYS:Storage/OpenUp-Superseded/ CLONE QUIET
+  If ERROR
+    Echo "Keeping Hyperion's icon.library failed. Nothing was installed."
+    Quit 20
+  EndIf
 EndIf
 ; without the originals our libraries have nothing to forward to: stop here
 If NOT EXISTS SYS:Storage/OpenUp-Superseded/workbench.library
@@ -31,6 +45,19 @@ If NOT EXISTS SYS:Storage/OpenUp-Superseded/icon.library
   Echo "Hyperion's icon.library isn't in SYS:Storage/OpenUp-Superseded. Nothing was installed."
   Quit 20
 EndIf
-Copy workbench.library icon.library LIBS: CLONE QUIET
+Copy workbench.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying workbench.library into LIBS: failed. Run Uninstall-R1 before rebooting."
+  Quit 20
+EndIf
+Copy icon.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying icon.library into LIBS: failed. Run Uninstall-R1 before rebooting."
+  Quit 20
+EndIf
 Copy wbspy C: CLONE QUIET
+If ERROR
+  Echo "The libraries are in, but wbspy couldn't be copied to C:."
+  Quit 10
+EndIf
 Echo "OpenBench R1 is in. Reboot to use it. Uninstall-R1 puts Hyperion's libraries back."

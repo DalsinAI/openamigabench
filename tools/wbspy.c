@@ -5,7 +5,8 @@
  *
  *   wbspy STATUS                 each library: the original's base, the spy
  *   wbspy START [ENTRIES n]      the spy on, keeping the last n calls (2048)
- *   wbspy SAVE file              the calls kept so far, oldest first, as text
+ *   wbspy SAVE file              the calls kept so far, both libraries merged
+ *                                in the order they were made (by the EClock)
  *   wbspy STOP                   the spy off, and its memory given back
  *   ... WORKBENCH or ICON        one library only (both without either)
  *
@@ -13,23 +14,33 @@
  * (and Spy-icon.library), reboot, then wbspy SAVE.
  *
  * MIT, Copyright (c) 2026 Dalsin Limited. */
+#include <stdlib.h>
 #include <string.h>
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <dos/dos.h>
 #include <dos/rdargs.h>
+#include <devices/timer.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/timer.h>
 
 #include "../proxy/proxy.h"
 #include "spyfmt.h"
 
-static const char version[] = "$VER: wbspy 0.1 (9.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
+static const char version[] __attribute__((used)) =
+    "$VER: wbspy 0.1 (9.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
 
 #define TEMPLATE "STATUS/S,START/S,ENTRIES/K/N,SAVE/K,STOP/S,WORKBENCH/S,ICON/S"
 enum { A_STATUS, A_START, A_ENTRIES, A_SAVE, A_STOP, A_WORKBENCH, A_ICON, A_COUNT };
 
 static const char *const names[2] = { "workbench.library", "icon.library" };
+
+/* The EClock, as the libraries read it for each call (closed at the end of main). */
+struct Device *TimerBase;
+static struct timerequest timer_io;
+static int timer_tried;
+static ULONG eclock_freq(void);
 static const char *const short_names[2] = { "workbench", "icon" };
 
 /* Our proxy's base, opened, or NULL (and why, said). */
@@ -50,31 +61,40 @@ static struct ProxyBase *open_proxy(const char *name)
 
 static void status(struct ProxyBase *b)
 {
-    struct spy_ring *r = b->spy;
+    struct spy_ring *r;
+    ULONG seq = 0, count = 0;
+    int on;
+    /* what STOP may free, read while nothing else runs */
+    Forbid();
+    r = b->spy;
+    if ((on = r && r->magic == SPY_MAGIC)) { seq = r->seq; count = r->count; }
+    Permit();
     Printf((CONST_STRPTR)"%s %ld.%ld: original %s at $%08lx", (LONG)b->name, (LONG)b->lib.lib_Version,
            (LONG)b->lib.lib_Revision, (LONG)b->private_name, (LONG)b->orig);
     if (b->error) Printf((CONST_STRPTR)" (last error %ld)", b->error);
-    if (r) Printf((CONST_STRPTR)"; spy on, %ld calls recorded, %ld kept\n", (LONG)r->seq,
-                  (LONG)(r->seq < r->count ? r->seq : r->count));
+    if (on) Printf((CONST_STRPTR)"; spy on, %ld calls recorded, the last %ld kept\n", (LONG)seq,
+                   (LONG)(seq < count ? seq : count));
     else PutStr((CONST_STRPTR)"; spy off\n");
 }
 
-static void start(struct ProxyBase *b, ULONG n)
+/* 1 when the spy is on (now or already). */
+static int start(struct ProxyBase *b, ULONG n)
 {
-    struct spy_ring *r = NULL;
+    struct spy_ring *r;
     if (b->spy) {
         Printf((CONST_STRPTR)"%s: the spy is already on\n", (LONG)b->name);
-        return;
+        return 1;
     }
     if (!(r = proxy_spy_new(n))) {
         Printf((CONST_STRPTR)"%s: no memory for %ld calls\n", (LONG)b->name, (LONG)n);
-        return;
+        return 0;
     }
     Forbid();
     if (!b->spy) { b->spy = r; r = NULL; }
     Permit();
     if (r) proxy_spy_free(r);
     else Printf((CONST_STRPTR)"%s: the spy is on, keeping the last %ld calls\n", (LONG)b->name, (LONG)n);
+    return 1;
 }
 
 static void stop(struct ProxyBase *b)
@@ -92,36 +112,94 @@ static void stop(struct ProxyBase *b)
     }
 }
 
-/* The calls kept, oldest first, appended to the file. 0 when it can't be written. */
-static int save(struct ProxyBase *b, int which, BPTR fh)
+/* A copy of a library's ring, taken while nothing else runs, or NULL. */
+static struct spy_ring *snapshot(struct ProxyBase *b)
 {
-    struct spy_ring *copy = NULL, *r;
-    ULONG i, k, bytes = 0;
-    static char line[1024];
+    struct spy_ring *r, *copy;
+    ULONG bytes = 0;
     Forbid();
-    if ((r = b->spy) && r->magic == SPY_MAGIC) {
-        bytes = r->bytes;
-        /* AllocVec may break the Forbid: the copy is taken after it */
-    }
+    if ((r = b->spy) && r->magic == SPY_MAGIC) bytes = r->bytes;
     Permit();
-    if (!bytes) return 1;
-    if (!(copy = AllocVec(bytes, MEMF_ANY))) return 0;
+    if (!bytes || !(copy = AllocVec(bytes, MEMF_ANY))) return NULL;   /* AllocVec may break a Forbid */
     Forbid();
-    if ((r = b->spy) && r->bytes == bytes) CopyMem(r, copy, bytes);
+    if ((r = b->spy) && r->magic == SPY_MAGIC && r->bytes == bytes) CopyMem(r, copy, bytes);
     else bytes = 0;
     Permit();
-    for (k = 0; bytes && k < copy->count; k++) {
-        const struct spy_entry *e = &copy->e[(copy->next + k) % copy->count];
+    if (!bytes) {
+        FreeVec(copy);
+        return NULL;
+    }
+    return copy;
+}
+
+typedef struct rec {
+    const struct spy_entry *e;
+    int lib;
+} rec;
+
+static int by_time;
+
+static int compare(const void *pa, const void *pb)
+{
+    const rec *a = pa, *b = pb;
+    if (by_time) {
+        if (a->e->time_hi != b->e->time_hi) return a->e->time_hi < b->e->time_hi ? -1 : 1;
+        if (a->e->time_lo != b->e->time_lo) return a->e->time_lo < b->e->time_lo ? -1 : 1;
+    }
+    if (a->lib != b->lib) return a->lib - b->lib;
+    return a->e->seq < b->e->seq ? -1 : a->e->seq > b->e->seq;
+}
+
+static unsigned long long eclock(const struct spy_entry *e)
+{
+    return ((unsigned long long)e->time_hi << 32) | e->time_lo;
+}
+
+/* Both libraries' calls, in the order they were made, to fh. 0 when it can't be written. */
+static int save(struct ProxyBase *base[2], BPTR fh)
+{
+    struct spy_ring *ring[2] = { NULL, NULL };
+    rec *recs = NULL;
+    ULONG n = 0, k, i, freq = 0;
+    int lib, ok = 1;
+    unsigned long long first = 0;
+    static char line[1024];
+    for (lib = 0; lib < 2; lib++)
+        if (base[lib] && (ring[lib] = snapshot(base[lib]))) n += ring[lib]->count;
+    if (n && !(recs = malloc(n * sizeof *recs))) ok = 0;
+    n = 0;
+    /* the EClock orders both libraries' calls, when both rings have it at the same rate */
+    by_time = 1;
+    for (lib = 0; lib < 2; lib++)
+        if (ring[lib]) {
+            if (!ring[lib]->eclock_freq || (freq && ring[lib]->eclock_freq != freq)) by_time = 0;
+            freq = ring[lib]->eclock_freq;
+        }
+    for (lib = 0; ok && lib < 2; lib++)
+        for (k = 0; ring[lib] && k < ring[lib]->count; k++)
+            if (ring[lib]->e[k].seq) { recs[n].e = &ring[lib]->e[k]; recs[n].lib = lib; n++; }
+    if (ok && n) {
+        qsort(recs, n, sizeof *recs, compare);
+        first = eclock(recs[0].e);
+    }
+    for (k = 0; ok && k < n; k++) {
+        const struct spy_entry *e = recs[k].e;
+        struct ProxyBase *b = base[recs[k].lib];
         spy_line l;
-        if (!e->seq) continue;
         memset(&l, 0, sizeof l);
         l.seq = e->seq;
+        l.time_us = -1;
+        if (by_time && freq) {
+            unsigned long long d = eclock(e) - first;
+            l.time_us = (long)(d / freq * 1000000ULL + d % freq * 1000000ULL / freq);
+        }
         l.task = e->task_name;
-        l.lib = short_names[which];
+        l.lib = short_names[recs[k].lib];
         l.func = e->idx < b->nfuncs ? b->funcs[e->idx].name : "?";
         l.offset = -(30 + 6 * (int)e->idx);
-        l.after = e->phase == SPY_AFTER;
         for (i = 0; i < 8; i++) l.regs[i] = e->regs[i];
+        l.returned = e->returned;
+        l.result = e->result;
         l.str = e->str;
         l.ntags = e->ntags;
         l.tags = e->tags;
@@ -129,13 +207,12 @@ static int save(struct ProxyBase *b, int which, BPTR fh)
         l.raw = e->raw;
         spy_format(line, sizeof line - 1, &l);
         strcat(line, "\n");
-        if (FPuts(fh, (CONST_STRPTR)line)) {
-            FreeVec(copy);
-            return 0;
-        }
+        if (FPuts(fh, (CONST_STRPTR)line)) ok = 0;
     }
-    FreeVec(copy);
-    return 1;
+    free(recs);
+    for (lib = 0; lib < 2; lib++)
+        if (ring[lib]) FreeVec(ring[lib]);
+    return ok;
 }
 
 int main(void)
@@ -147,7 +224,6 @@ int main(void)
     int i, rc = RETURN_OK, want[2];
     ULONG n = 2048;
 
-    (void)version;
     if (!(rda = ReadArgs((CONST_STRPTR)TEMPLATE, args, NULL))) {
         PrintFault(IoErr(), (CONST_STRPTR)"wbspy");
         return RETURN_FAIL;
@@ -157,29 +233,46 @@ int main(void)
     if (args[A_ENTRIES]) n = *(ULONG *)args[A_ENTRIES];
     if (n < 16) n = 16;
     if (n > 65536) n = 65536;
-    if (args[A_SAVE] && !(fh = Open((CONST_STRPTR)args[A_SAVE], MODE_NEWFILE))) {
-        PrintFault(IoErr(), (CONST_STRPTR)args[A_SAVE]);
-        FreeArgs(rda);
-        return RETURN_FAIL;
-    }
-    for (i = 0; i < 2; i++) {
-        if (!want[i]) continue;
-        if (!(base[i] = open_proxy(names[i]))) { rc = RETURN_WARN; continue; }
-        if (args[A_START]) start(base[i], n);
-        if (fh && !save(base[i], i, fh)) {
+    for (i = 0; i < 2; i++)
+        if (want[i] && !(base[i] = open_proxy(names[i]))) rc = RETURN_WARN;
+    for (i = 0; i < 2; i++)
+        if (base[i] && args[A_START] && !start(base[i], n)) rc = RETURN_FAIL;
+    if (args[A_SAVE]) {
+        /* written as one file, in the order the calls were made */
+        if (!(fh = Open((CONST_STRPTR)args[A_SAVE], MODE_NEWFILE)) || !save(base, fh)) {
             PrintFault(IoErr(), (CONST_STRPTR)args[A_SAVE]);
             rc = RETURN_FAIL;
         }
+        /* buffered writes may only fail as the file closes */
+        if (fh && !Close(fh)) {
+            PrintFault(IoErr(), (CONST_STRPTR)args[A_SAVE]);
+            rc = RETURN_FAIL;
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        if (!base[i]) continue;
         if (args[A_STOP]) stop(base[i]);
-        if (args[A_STATUS] || (!args[A_START] && !args[A_STOP] && !fh)) status(base[i]);
+        if (args[A_STATUS] || (!args[A_START] && !args[A_STOP] && !args[A_SAVE])) status(base[i]);
         CloseLibrary(&base[i]->lib);
     }
-    if (fh) Close(fh);
+    if (TimerBase) CloseDevice((struct IORequest *)&timer_io);
     FreeArgs(rda);
     return rc;
 }
 
-/* The ring: the same layout the libraries use (proxy.h), made here. */
+static ULONG eclock_freq(void)
+{
+    struct EClockVal ev;
+    if (!timer_tried) {
+        timer_tried = 1;
+        if (!OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_ECLOCK, (struct IORequest *)&timer_io, 0))
+            TimerBase = timer_io.tr_node.io_Device;
+    }
+    return TimerBase ? ReadEClock(&ev) : 0;
+}
+
+/* The ring: the same layout the libraries use (proxy.h), made here, with
+ * the EClock's rate, so a save can turn the calls' times into milliseconds. */
 struct spy_ring *proxy_spy_new(ULONG n)
 {
     ULONG bytes = sizeof(struct spy_ring) + (n - 1) * sizeof(struct spy_entry);
@@ -188,6 +281,7 @@ struct spy_ring *proxy_spy_new(ULONG n)
     r->magic = SPY_MAGIC;
     r->count = n;
     r->bytes = bytes;
+    r->eclock_freq = eclock_freq();
     return r;
 }
 

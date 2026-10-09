@@ -13,13 +13,17 @@
 #include <dos/dos.h>
 #include <dos/dosextens.h>
 #include <dos/var.h>
+#include <devices/timer.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
+#include <proto/timer.h>
 
 #include "proxy.h"
 
 struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
+struct Device *TimerBase;           /* the EClock for the spy's times, or NULL */
+static struct timerequest timer_io; /* kept open: R1 never goes away */
 
 /* The stubs read these from assembler: they must not move (checked on the
  * 68k, where pointers are 4 bytes; a 64-bit host's syntax check skips it). */
@@ -62,14 +66,21 @@ static ULONG to_ulong(const char *s)
     return v;
 }
 
-/* An address the spy may read: not low memory, nor the chips' and CIAs'
- * registers (reading a CIA's ICR clears it), nor the AutoConfig space. */
-static int readable(ULONG p)
+/* 1 when n bytes from p may be read: both ends in memory exec knows
+ * (TypeOfMem), or in the ROMs. A value that only looks like a pointer (a
+ * WBConfig setting, a short object at the end of a board) isn't read, and
+ * neither are the chips', the CIAs' (reading an ICR clears it) or the
+ * AutoConfig space. */
+static int in_rom(ULONG p)
 {
-    if (p < 0x400) return 0;
-    if (p >= 0x00A00000UL && p < 0x00E00000UL) return 0;
-    if (p >= 0x00E80000UL && p < 0x00F00000UL) return 0;
-    return 1;
+    return (p >= 0x00E00000UL && p < 0x00E80000UL) || p >= 0x00F00000UL;
+}
+
+static int readable(ULONG p, ULONG n)
+{
+    if (p < 0x400 || p + n < p) return 0;
+    if (in_rom(p) && in_rom(p + n - 1)) return 1;
+    return TypeOfMem((APTR)p) && TypeOfMem((APTR)(p + n - 1));
 }
 
 /* ---- the original, loaded privately ---- */
@@ -114,6 +125,15 @@ static int load_original(struct ProxyBase *b)
     BPTR seg;
     struct Resident *rt;
     struct Library *lib;
+    if (b->orig_linked) {
+        /* made and linked before, but its Open said no: asked again, never made twice */
+        if (!(b->orig = OpenLibrary((STRPTR)b->private_name, 0))) {
+            b->error = PB_ERR_OPEN;
+            return 0;
+        }
+        b->error = 0;
+        return 1;
+    }
     if (GetVar((STRPTR)"OpenBench/Originals", (STRPTR)path, 160, GVF_GLOBAL_ONLY) <= 0)
         copy_str(path, ORIGINALS, sizeof path);
     if (!AddPart((STRPTR)path, (STRPTR)b->name, sizeof path)) {
@@ -155,13 +175,24 @@ static int load_original(struct ProxyBase *b)
         Permit();
     }
     b->orig_seg = seg;
+    b->orig_linked = lib;
     /* opened like any library: its own Open runs */
     if (!(b->orig = OpenLibrary((STRPTR)b->private_name, 0))) {
         b->error = PB_ERR_OPEN;
-        return 0;                               /* it stays linked; a later open may try again */
+        return 0;                               /* it stays linked; a later open asks it again */
     }
     b->error = 0;
     return 1;
+}
+
+/* The EClock, for the spy's times: timer.device is in ROM, and ReadEClock
+ * may be called from any task without I/O. */
+static void timer_open(void)
+{
+    if (TimerBase) return;
+    memset(&timer_io, 0, sizeof timer_io);
+    if (!OpenDevice((STRPTR)TIMERNAME, UNIT_ECLOCK, (struct IORequest *)&timer_io, 0))
+        TimerBase = timer_io.tr_node.io_Device;
 }
 
 /* ---- the library's lifecycle ---- */
@@ -171,6 +202,10 @@ struct Library *__attribute__((used)) proxy_init(register struct ProxyBase *b __
                                                  register struct ExecBase *sb __asm("a6"))
 {
     SysBase = sb;
+    /* built for the 68020 and up (the design's section 6): on a 68000 or
+     * 68010 nothing here may run, so it says no before anything else */
+    if (!(sb->AttnFlags & AFF_68020))
+        return NULL;
     if (!(DOSBase = (struct DosLibrary *)OpenLibrary((STRPTR)"dos.library", 39)))
         return NULL;
     b->lib.lib_Node.ln_Type = NT_LIBRARY;
@@ -214,7 +249,10 @@ struct Library *__attribute__((used)) proxy_open(register struct ProxyBase *b __
             b->error = PB_ERR_NOTPROC;
         } else {
             b->loading = me;
-            if (load_original(b) && !b->spy) spy_from_env(b);
+            if (load_original(b) && !b->spy) {
+                timer_open();
+                spy_from_env(b);
+            }
             b->loading = NULL;
         }
     }
@@ -255,6 +293,10 @@ struct spy_ring *proxy_spy_new(ULONG n)
     r->magic = SPY_MAGIC;
     r->count = n;
     r->bytes = bytes;
+    if (TimerBase) {
+        struct EClockVal ev;
+        r->eclock_freq = ReadEClock(&ev);
+    }
     return r;
 }
 
@@ -288,7 +330,7 @@ static void task_name(struct Task *t, char *out)
 static int copy_tags(ULONG *out, const ULONG *t)
 {
     int n = 0, hops = 0, guard = 64;
-    while (t && readable((ULONG)t) && n < SPY_TAGS && guard--) {
+    while (t && readable((ULONG)t, 8) && n < SPY_TAGS && guard--) {
         ULONG tag = t[0], data = t[1];
         if (tag == 0) break;                            /* TAG_DONE */
         if (tag == 1) { t += 2; continue; }             /* TAG_IGNORE */
@@ -315,58 +357,83 @@ static struct spy_entry *spy_slot(struct spy_ring *r)
     return e;
 }
 
-/* regs: d0-d7 then a0-a6, as the stub saved them; a6 is our base. */
-void __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
+/* A string argument: as much as fits, each byte only where it may be read. */
+static void copy_arg(char *d, ULONG p, int n)
+{
+    int i = 0, whole = readable(p, (ULONG)n);   /* usually: no need to ask byte by byte */
+    if (whole || readable(p, 1))
+        while (i < n - 1 && (whole || readable(p + i, 1)) && ((const char *)p)[i]) {
+            d[i] = ((const char *)p)[i];
+            i++;
+        }
+    d[i] = 0;
+}
+
+/* regs: d0-d7 then a0-a6, as the stub saved them; a6 is our base. The
+ * token goes back to the stub, which hands it to proxy_spy_after. */
+ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
 {
     struct ProxyBase *b = (struct ProxyBase *)regs[14];
     struct spy_ring *r;
     struct spy_entry *e;
     const struct spy_func *f;
     static const UBYTE keep[8] = { 0, 1, 2, 8, 9, 10, 11, 12 };    /* d0 d1 d2 a0 a1 a2 a3 a4 */
+    ULONG slot, token;
     int i;
     Forbid();
     r = b->spy;
     if (!r || r->magic != SPY_MAGIC || idx < 0 || idx >= b->nfuncs) {
         Permit();
-        return;
+        return 0;
     }
     f = &b->funcs[idx];
+    slot = r->next;
     e = spy_slot(r);
+    token = SPY_TOKEN(e->seq, slot);
+    if (TimerBase) {
+        struct EClockVal ev;
+        ReadEClock(&ev);
+        e->time_hi = ev.ev_hi;
+        e->time_lo = ev.ev_lo;
+    }
     e->task = FindTask(NULL);
     e->idx = (UBYTE)idx;
-    e->phase = SPY_BEFORE;
     for (i = 0; i < 8; i++) e->regs[i] = regs[keep[i]];
     task_name(e->task, e->task_name);
-    if (f->str_reg >= 0 && readable(regs[(int)f->str_reg]))
-        copy_str(e->str, (const char *)regs[(int)f->str_reg], SPY_STR);
+    if (f->str_reg >= 0)
+        copy_arg(e->str, regs[(int)f->str_reg], SPY_STR);
     if (f->tag_reg >= 0 && regs[(int)f->tag_reg])
         e->ntags = (UBYTE)copy_tags(e->tags, (const ULONG *)regs[(int)f->tag_reg]);
-    if (f->raw_reg >= 0 && readable(regs[(int)f->raw_reg])) {
+    if (f->raw_reg >= 0 && readable(regs[(int)f->raw_reg], SPY_RAW)) {
         memcpy(e->raw, (const void *)regs[(int)f->raw_reg], SPY_RAW);
         e->nraw = SPY_RAW;
     }
     Permit();
+    return token;
 }
 
-void __attribute__((used)) proxy_spy_after(LONG idx, ULONG result, struct ProxyBase *b)
+/* The result, put into the call's own record, unless its slot has been
+ * reused meanwhile (a long call, a small ring). */
+void __attribute__((used)) proxy_spy_after(LONG idx, ULONG token, ULONG result, struct ProxyBase *b)
 {
     struct spy_ring *r;
     struct spy_entry *e;
+    ULONG slot = token & 0xFFFFUL;
+    if (!(token & 0x80000000UL)) return;
     Forbid();
     r = b->spy;
-    if (!r || r->magic != SPY_MAGIC || idx < 0 || idx >= b->nfuncs) {
+    if (!r || r->magic != SPY_MAGIC || slot >= r->count) {
         Permit();
         return;
     }
-    e = spy_slot(r);
-    e->task = FindTask(NULL);
-    e->idx = (UBYTE)idx;
-    e->phase = SPY_AFTER;
-    e->regs[0] = result;
-    task_name(e->task, e->task_name);
-    if (b->funcs[idx].raw_result && readable(result)) {
-        memcpy(e->raw, (const void *)result, SPY_RAW);
-        e->nraw = SPY_RAW;
+    e = &r->e[slot];
+    if (e->idx == (UBYTE)idx && SPY_TOKEN(e->seq, slot) == token && !e->returned) {
+        e->result = result;
+        e->returned = 1;
+        if (b->funcs[idx].raw_result && readable(result, SPY_RAW)) {
+            memcpy(e->raw, (const void *)result, SPY_RAW);
+            e->nraw = SPY_RAW;
+        }
     }
     Permit();
 }
