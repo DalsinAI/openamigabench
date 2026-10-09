@@ -1,0 +1,27 @@
+.key DUMMY
+; Hyperion's workbench.library and icon.library back in LIBS:, from
+; SYS:Storage/OpenUp-Superseded, where Install-R1 kept them.
+; MIT, Copyright (c) 2026 Dalsin Limited.
+FailAt 21
+If NOT EXISTS SYS:Storage/OpenUp-Superseded/workbench.library
+  Echo "Hyperion's workbench.library isn't in SYS:Storage/OpenUp-Superseded."
+  Quit 20
+EndIf
+If NOT EXISTS SYS:Storage/OpenUp-Superseded/icon.library
+  Echo "Hyperion's icon.library isn't in SYS:Storage/OpenUp-Superseded."
+  Quit 20
+EndIf
+Copy SYS:Storage/OpenUp-Superseded/workbench.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying Hyperion's workbench.library back failed: LIBS: may still have ours. Don't reboot until it is back."
+  Quit 20
+EndIf
+Copy SYS:Storage/OpenUp-Superseded/icon.library LIBS: CLONE QUIET
+If ERROR
+  Echo "Copying Hyperion's icon.library back failed: LIBS: may still have ours. Don't reboot until it is back."
+  Quit 20
+EndIf
+If EXISTS C:wbspy
+  Delete C:wbspy QUIET
+EndIf
+Echo "Hyperion's libraries are back. Reboot to use them."
