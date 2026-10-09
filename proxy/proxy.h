@@ -18,7 +18,7 @@
 #include <dos/dos.h>
 
 #define PB_MAGIC 0x4F42504EUL       /* "OBPN": an OpenBench proxy base */
-#define PB_VERSION 1                /* this layout */
+#define PB_VERSION 2                /* this layout */
 
 /* Where the stubs find the original's base and the spy (bytes from the base). */
 #define PB_ORIG 40
@@ -45,6 +45,8 @@ struct ProxyBase {
     const struct spy_func *funcs;   /* each entry's name and what the spy copies (wbspy reads the names) */
     LONG error;                     /* why the original couldn't be had (IoErr, or ours below) */
     struct Library *orig_linked;    /* the original, made and linked, before it is opened */
+    UWORD spy_gen;                  /* raised each time a ring is put in: a call made into an
+                                     * older ring never writes its result into a newer one */
 };
 
 /* Our own error codes in ProxyBase.error (above DOS's). */
@@ -85,14 +87,21 @@ struct spy_ring {
     ULONG seq;                      /* the last sequence number given: the calls recorded */
     ULONG bytes;                    /* the allocation, for FreeVec's sake (AllocVec) */
     ULONG eclock_freq;              /* EClock ticks a second, 0 when there is no clock */
+    UWORD gen;                      /* the base's spy_gen when this ring was put in */
+    UWORD pad;
     struct spy_entry e[1];
 };
 #define SPY_MAGIC 0x53505932UL      /* "SPY2" */
 
 /* What proxy_spy_before gives the stub, and the stub gives back with the
- * result: the slot, and the low bits of the call's sequence number, so a
- * slot reused meanwhile is left alone. 0: nothing recorded. */
-#define SPY_TOKEN(seq, slot) (0x80000000UL | (((seq) & 0x7FFFUL) << 16) | (slot))
+ * result: the ring's generation, the low bits of the call's sequence number
+ * and its slot, so a slot reused meanwhile, or a ring put in since, is left
+ * alone. 0: nothing recorded. */
+#define SPY_TOKEN(gen, seq, slot) \
+    (0x80000000UL | (((ULONG)(gen) & 0x7FUL) << 24) | (((seq) & 0xFFUL) << 16) | ((slot) & 0xFFFFUL))
+
+/* Puts a ring in (under Forbid, by whoever holds it), with the next generation. */
+#define SPY_INSTALL(b, r) do { (r)->gen = ++(b)->spy_gen; (b)->spy = (r); } while (0)
 
 /* What the spy copies for each entry (indexes into the saved registers:
  * 0-7 are d0-d7, 8-14 are a0-a6). -1: nothing. */

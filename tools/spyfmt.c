@@ -35,13 +35,21 @@ int spy_format(char *out, int n, const spy_line *l)
     out[0] = 0;
     snprintf(buf, sizeof buf, "%06lu ", (unsigned long)l->seq);
     add(out, n, &len, buf);
-    if (l->time_us >= 0) {
-        snprintf(buf, sizeof buf, "%8ld.%03ldms ", l->time_us / 1000, l->time_us % 1000);
+    if (l->time_ms >= 0) {
+        snprintf(buf, sizeof buf, "%8ld.%03dms ", l->time_ms, l->time_us);
         add(out, n, &len, buf);
     }
-    snprintf(buf, sizeof buf, "[%-15.15s] %s %s(%d)", l->task ? l->task : "", l->lib ? l->lib : "?",
-             l->func ? l->func : "?", l->offset);
-    add(out, n, &len, buf);
+    {
+        /* the caller's name, escaped like any string, then fitted to 15 */
+        char name[80];
+        int nl = 0;
+        const unsigned char *p = (const unsigned char *)(l->task ? l->task : "");
+        name[0] = 0;
+        for (; *p && nl < 60; p++) add_char(name, sizeof name, &nl, *p, ']');
+        snprintf(buf, sizeof buf, "[%-15.15s] %s %s(%d)", name, l->lib ? l->lib : "?", l->func ? l->func : "?",
+                 l->offset);
+        add(out, n, &len, buf);
+    }
     for (i = 0; i < 8; i++) {
         snprintf(buf, sizeof buf, " %s=$%08lX", reg_names[i], (unsigned long)l->regs[i]);
         add(out, n, &len, buf);

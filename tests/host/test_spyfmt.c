@@ -24,7 +24,7 @@ int main(void)
     spy_line l;
 
     memset(&l, 0, sizeof l);
-    l.seq = 42; l.time_us = 12345; l.task = "IPrefs"; l.lib = "workbench"; l.func = "WBConfig"; l.offset = -84;
+    l.seq = 42; l.time_ms = 12; l.time_us = 345; l.task = "IPrefs"; l.lib = "workbench"; l.func = "WBConfig"; l.offset = -84;
     l.regs[0] = 3; l.regs[1] = 0x0807A2C0;
     l.returned = 1; l.result = 1;
     l.nraw = 5; l.raw = raw;
@@ -34,7 +34,7 @@ int main(void)
            " a0=$00000000 a1=$00000000 a2=$00000000 a3=$00000000 a4=$00000000 -> $00000001 raw=54692700FF 'Ti\\'..'");
 
     memset(&l, 0, sizeof l);
-    l.seq = 43; l.time_us = -1; l.task = "Workbench"; l.lib = "icon"; l.func = "GetIconTagList"; l.offset = -180;
+    l.seq = 43; l.time_ms = -1; l.task = "Workbench"; l.lib = "icon"; l.func = "GetIconTagList"; l.offset = -180;
     l.str = "SYS:Prefs"; l.ntags = 2; l.tags = tags;
     spy_format(out, sizeof out, &l);
     expect("a call with a name and tags, still running", out,
@@ -42,15 +42,23 @@ int main(void)
            " tags={$80000021=$00000005, $8000003A=$00001234} -> (no result recorded)");
 
     memset(&l, 0, sizeof l);
-    l.seq = 44; l.time_us = -1; l.task = "a task with a very long name"; l.lib = "icon"; l.func = "GetDiskObject";
+    l.seq = 44; l.time_ms = -1; l.task = "a task with a very long name"; l.lib = "icon"; l.func = "GetDiskObject";
     l.offset = -78; l.str = "Say \"hi\"\n\\ok\x01"; l.returned = 1; l.result = 0x00305000;
     spy_format(out, sizeof out, &l);
     expect("a string with quotes, a newline, a backslash and a control character", out,
            "000044 [a task with a v] icon GetDiskObject(-78)" ZERO_REGS " \"Say \\\"hi\\\"\\n\\\\ok\\x01\" -> $00305000");
 
+    /* a name with a newline stays on one line */
+    memset(&l, 0, sizeof l);
+    l.seq = 45; l.time_ms = 2210000; l.time_us = 7; l.task = "Bad\nName"; l.lib = "workbench"; l.func = "WBInfo";
+    l.offset = -90; l.returned = 1; l.result = 1;
+    spy_format(out, sizeof out, &l);
+    expect("a caller's name escaped, and a time past 36 minutes", out,
+           "000045  2210000.007ms [Bad\\nName      ] workbench WBInfo(-90)" ZERO_REGS " -> $00000001");
+
     /* never past the buffer */
     memset(&l, 0, sizeof l);
-    l.seq = 1; l.time_us = -1; l.task = "t"; l.lib = "icon"; l.func = "FreeDiskObject"; l.offset = -90;
+    l.seq = 1; l.time_ms = -1; l.task = "t"; l.lib = "icon"; l.func = "FreeDiskObject"; l.offset = -90;
     spy_format(out, 20, &l);
     expect("cut to the buffer", out, "000001 [t          ");  /* 19 characters and the 0 */
 

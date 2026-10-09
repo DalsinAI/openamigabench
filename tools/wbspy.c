@@ -90,7 +90,7 @@ static int start(struct ProxyBase *b, ULONG n)
         return 0;
     }
     Forbid();
-    if (!b->spy) { b->spy = r; r = NULL; }
+    if (!b->spy) { SPY_INSTALL(b, r); r = NULL; }
     Permit();
     if (r) proxy_spy_free(r);
     else Printf((CONST_STRPTR)"%s: the spy is on, keeping the last %ld calls\n", (LONG)b->name, (LONG)n);
@@ -112,24 +112,41 @@ static void stop(struct ProxyBase *b)
     }
 }
 
-/* A copy of a library's ring, taken while nothing else runs, or NULL. */
-static struct spy_ring *snapshot(struct ProxyBase *b)
+/* Copies of both libraries' rings, taken in one Forbid, so the merged
+ * save is the same moment for both. 1, or 0 when a copy couldn't be
+ * allocated (a ring that isn't on is simply not there). */
+static int snapshot_both(struct ProxyBase *base[2], struct spy_ring *copy[2])
 {
-    struct spy_ring *r, *copy;
-    ULONG bytes = 0;
-    Forbid();
-    if ((r = b->spy) && r->magic == SPY_MAGIC) bytes = r->bytes;
-    Permit();
-    if (!bytes || !(copy = AllocVec(bytes, MEMF_ANY))) return NULL;   /* AllocVec may break a Forbid */
-    Forbid();
-    if ((r = b->spy) && r->magic == SPY_MAGIC && r->bytes == bytes) CopyMem(r, copy, bytes);
-    else bytes = 0;
-    Permit();
-    if (!bytes) {
-        FreeVec(copy);
-        return NULL;
+    ULONG bytes[2] = { 0, 0 };
+    int lib, ok = 1, again = 1, tries = 0;
+    while (again && tries++ < 4) {
+        again = 0;
+        Forbid();
+        for (lib = 0; lib < 2; lib++) {
+            struct spy_ring *r = base[lib] ? base[lib]->spy : NULL;
+            bytes[lib] = r && r->magic == SPY_MAGIC ? r->bytes : 0;
+        }
+        Permit();
+        /* allocated outside the Forbid, which AllocVec may break */
+        for (lib = 0; lib < 2; lib++) {
+            if (copy[lib]) { FreeVec(copy[lib]); copy[lib] = NULL; }
+            if (bytes[lib] && !(copy[lib] = AllocVec(bytes[lib], MEMF_ANY))) ok = 0;
+        }
+        if (!ok) break;
+        Forbid();
+        for (lib = 0; lib < 2; lib++) {
+            struct spy_ring *r = base[lib] ? base[lib]->spy : NULL;
+            ULONG now = r && r->magic == SPY_MAGIC ? r->bytes : 0;
+            if (now != bytes[lib]) again = 1;          /* a ring came or went meanwhile */
+            else if (now) CopyMem(r, copy[lib], now);
+        }
+        Permit();
     }
-    return copy;
+    if (ok && again) ok = 0;
+    if (!ok)
+        for (lib = 0; lib < 2; lib++)
+            if (copy[lib]) { FreeVec(copy[lib]); copy[lib] = NULL; }
+    return ok;
 }
 
 typedef struct rec {
@@ -155,7 +172,8 @@ static unsigned long long eclock(const struct spy_entry *e)
     return ((unsigned long long)e->time_hi << 32) | e->time_lo;
 }
 
-/* Both libraries' calls, in the order they were made, to fh. 0 when it can't be written. */
+/* Both libraries' calls, in the order they were made, to fh. 0 when they
+ * couldn't be copied (no memory) or the file couldn't be written. */
 static int save(struct ProxyBase *base[2], BPTR fh)
 {
     struct spy_ring *ring[2] = { NULL, NULL };
@@ -164,8 +182,13 @@ static int save(struct ProxyBase *base[2], BPTR fh)
     int lib, ok = 1;
     unsigned long long first = 0;
     static char line[1024];
+    if (!snapshot_both(base, ring)) {
+        PutStr((CONST_STRPTR)"wbspy: no memory to copy the recording\n");
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return 0;
+    }
     for (lib = 0; lib < 2; lib++)
-        if (base[lib] && (ring[lib] = snapshot(base[lib]))) n += ring[lib]->count;
+        if (ring[lib]) n += ring[lib]->count;
     if (n && !(recs = malloc(n * sizeof *recs))) ok = 0;
     n = 0;
     /* the EClock orders both libraries' calls, when both rings have it at the same rate */
@@ -188,10 +211,12 @@ static int save(struct ProxyBase *base[2], BPTR fh)
         spy_line l;
         memset(&l, 0, sizeof l);
         l.seq = e->seq;
-        l.time_us = -1;
+        l.time_ms = -1;
         if (by_time && freq) {
             unsigned long long d = eclock(e) - first;
-            l.time_us = (long)(d / freq * 1000000ULL + d % freq * 1000000ULL / freq);
+            unsigned long long us = d / freq * 1000000ULL + d % freq * 1000000ULL / freq;
+            l.time_ms = (long)(us / 1000);          /* 24 days fit; a recording is minutes */
+            l.time_us = (int)(us % 1000);
         }
         l.task = e->task_name;
         l.lib = short_names[recs[k].lib];

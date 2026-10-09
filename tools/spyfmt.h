@@ -9,7 +9,8 @@
 
 typedef struct spy_line {
     uint32_t seq;               /* the call's number in its library */
-    long time_us;               /* microseconds since the first call saved; -1 when there is no clock */
+    long time_ms;               /* milliseconds since the first call saved; -1 when there is no clock */
+    int time_us;                /* and the microseconds over (0-999) */
     const char *task;           /* the caller's name */
     const char *lib;            /* "workbench", "icon" */
     const char *func;           /* "WBConfig" */

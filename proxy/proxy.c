@@ -73,7 +73,8 @@ static ULONG to_ulong(const char *s)
  * AutoConfig space. */
 static int in_rom(ULONG p)
 {
-    return (p >= 0x00E00000UL && p < 0x00E80000UL) || p >= 0x00F00000UL;
+    return (p >= 0x00E00000UL && p < 0x00E80000UL) ||  /* an extended ROM */
+           (p >= 0x00F00000UL && p < 0x01000000UL);     /* the Kickstart, and the $F00000 window */
 }
 
 static int readable(ULONG p, ULONG n)
@@ -114,7 +115,14 @@ static void spy_from_env(struct ProxyBase *b)
     n = to_ulong(v);
     if (!n) n = DEFAULT_SPY;
     if (n > 65536) n = 65536;
-    b->spy = proxy_spy_new(n);
+    {
+        struct spy_ring *r = proxy_spy_new(n);
+        if (r) {
+            Forbid();
+            SPY_INSTALL(b, r);
+            Permit();
+        }
+    }
 }
 
 /* Loads Hyperion's original from the originals' drawer, makes its base,
@@ -389,7 +397,7 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
     f = &b->funcs[idx];
     slot = r->next;
     e = spy_slot(r);
-    token = SPY_TOKEN(e->seq, slot);
+    token = SPY_TOKEN(r->gen, e->seq, slot);
     if (TimerBase) {
         struct EClockVal ev;
         ReadEClock(&ev);
@@ -427,7 +435,7 @@ void __attribute__((used)) proxy_spy_after(LONG idx, ULONG token, ULONG result, 
         return;
     }
     e = &r->e[slot];
-    if (e->idx == (UBYTE)idx && SPY_TOKEN(e->seq, slot) == token && !e->returned) {
+    if (e->idx == (UBYTE)idx && SPY_TOKEN(r->gen, e->seq, slot) == token && !e->returned) {
         e->result = result;
         e->returned = 1;
         if (b->funcs[idx].raw_result && readable(result, SPY_RAW)) {
