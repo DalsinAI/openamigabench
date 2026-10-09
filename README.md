@@ -6,6 +6,8 @@ Our own Workbench for AmigaOS 3.2: a `workbench.library`, an `icon.library` and 
 - **workbench.library** keeps exactly 3.2's interface: every entry programs, IPrefs and `LoadWB` call, and no new ones.
 - **OpenBench** is the desktop. It uses the drawer windows already approved and built as OpenDrawer, OpenFiles' engine for copying and deleting, and OpenLook's themes. The root is always a backdrop. The bar at the top of the screen can be see-through and can hide itself.
 
+The window look (Open light) is written up in `Design-Window-Look.md`, with its reference picture in `reference/`.
+
 The design is in amigachrome: `docs/design/Design-Workbench-Replacement.md`. Its shape was approved on 9 October 2026. This repository was named then, and the desktop was named OpenBench.
 
 ## Status: step R1, not yet run
