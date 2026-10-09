@@ -386,7 +386,7 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
     struct spy_entry *e;
     const struct spy_func *f;
     static const UBYTE keep[8] = { 0, 1, 2, 8, 9, 10, 11, 12 };    /* d0 d1 d2 a0 a1 a2 a3 a4 */
-    ULONG slot, token;
+    ULONG token;
     int i;
     Forbid();
     r = b->spy;
@@ -395,9 +395,8 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
         return 0;
     }
     f = &b->funcs[idx];
-    slot = r->next;
     e = spy_slot(r);
-    token = SPY_TOKEN(r->gen, e->seq, slot);
+    token = e->seq;
     if (TimerBase) {
         struct EClockVal ev;
         ReadEClock(&ev);
@@ -421,21 +420,20 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
 }
 
 /* The result, put into the call's own record, unless its slot has been
- * reused meanwhile (a long call, a small ring). */
+ * reused meanwhile (a long call, a small ring) or the ring has changed. */
 void __attribute__((used)) proxy_spy_after(LONG idx, ULONG token, ULONG result, struct ProxyBase *b)
 {
     struct spy_ring *r;
     struct spy_entry *e;
-    ULONG slot = token & 0xFFFFUL;
-    if (!(token & 0x80000000UL)) return;
+    if (!token) return;
     Forbid();
     r = b->spy;
-    if (!r || r->magic != SPY_MAGIC || slot >= r->count) {
+    if (!r || r->magic != SPY_MAGIC || token <= r->seq0 || token > r->seq) {
         Permit();
         return;
     }
-    e = &r->e[slot];
-    if (e->idx == (UBYTE)idx && SPY_TOKEN(r->gen, e->seq, slot) == token && !e->returned) {
+    e = &r->e[(token - r->seq0 - 1) % r->count];
+    if (e->idx == (UBYTE)idx && e->seq == token && !e->returned) {
         e->result = result;
         e->returned = 1;
         if (b->funcs[idx].raw_result && readable(result, SPY_RAW)) {

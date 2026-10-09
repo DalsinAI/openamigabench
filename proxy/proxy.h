@@ -89,19 +89,20 @@ struct spy_ring {
     ULONG eclock_freq;              /* EClock ticks a second, 0 when there is no clock */
     UWORD gen;                      /* the base's spy_gen when this ring was put in */
     UWORD pad;
+    ULONG seq0;                     /* sequence numbers start after this: gen << 24 */
     struct spy_entry e[1];
 };
 #define SPY_MAGIC 0x53505932UL      /* "SPY2" */
 
 /* What proxy_spy_before gives the stub, and the stub gives back with the
- * result: the ring's generation, the low bits of the call's sequence number
- * and its slot, so a slot reused meanwhile, or a ring put in since, is left
- * alone. 0: nothing recorded. */
-#define SPY_TOKEN(gen, seq, slot) \
-    (0x80000000UL | (((ULONG)(gen) & 0x7FUL) << 24) | (((seq) & 0xFFUL) << 16) | ((slot) & 0xFFFFUL))
+ * result, is the call's whole sequence number: the slot follows from it
+ * ((seq - seq0 - 1) % count), and a slot reused since, even a ring later,
+ * holds another number. Each ring's numbers start at its generation << 24,
+ * so a ring put in since never holds the same numbers. 0: nothing recorded. */
 
 /* Puts a ring in (under Forbid, by whoever holds it), with the next generation. */
-#define SPY_INSTALL(b, r) do { (r)->gen = ++(b)->spy_gen; (b)->spy = (r); } while (0)
+#define SPY_INSTALL(b, r) do { (r)->gen = ++(b)->spy_gen; (r)->seq0 = (r)->seq = (ULONG)(r)->gen << 24; \
+                               (b)->spy = (r); } while (0)
 
 /* What the spy copies for each entry (indexes into the saved registers:
  * 0-7 are d0-d7, 8-14 are a0-a6). -1: nothing. */

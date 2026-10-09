@@ -43,10 +43,10 @@ int main(void)
 
     memset(&l, 0, sizeof l);
     l.seq = 44; l.time_ms = -1; l.task = "a task with a very long name"; l.lib = "icon"; l.func = "GetDiskObject";
-    l.offset = -78; l.str = "Say \"hi\"\n\\ok\x01"; l.returned = 1; l.result = 0x00305000;
+    l.offset = -78; l.str = "Say \"hi\"\n\\ok\x01" "A"; l.returned = 1; l.result = 0x00305000;
     spy_format(out, sizeof out, &l);
     expect("a string with quotes, a newline, a backslash and a control character", out,
-           "000044 [a task with a v] icon GetDiskObject(-78)" ZERO_REGS " \"Say \\\"hi\\\"\\n\\\\ok\\x01\" -> $00305000");
+           "000044 [a task with a v] icon GetDiskObject(-78)" ZERO_REGS " \"Say \\\"hi\\\"\\n\\\\ok\\001A\" -> $00305000");
 
     /* a name with a newline stays on one line */
     memset(&l, 0, sizeof l);
@@ -55,6 +55,14 @@ int main(void)
     spy_format(out, sizeof out, &l);
     expect("a caller's name escaped, and a time past 36 minutes", out,
            "000045  2210000.007ms [Bad\\nName      ] workbench WBInfo(-90)" ZERO_REGS " -> $00000001");
+
+    /* a name cut only between escapes */
+    memset(&l, 0, sizeof l);
+    l.seq = 46; l.time_ms = -1; l.task = "fourteen chars\nmore"; l.lib = "icon"; l.func = "FreeDiskObject"; l.offset = -90;
+    l.returned = 1;
+    spy_format(out, sizeof out, &l);
+    expect("a 15-column name never ends inside an escape", out,
+           "000046 [fourteen chars ] icon FreeDiskObject(-90)" ZERO_REGS " -> $00000000");
 
     /* never past the buffer */
     memset(&l, 0, sizeof l);

@@ -14,16 +14,23 @@ static void add(char *out, int n, int *len, const char *s)
     out[*len] = 0;
 }
 
-/* One character as C would write it inside quote marks q. */
-static void add_char(char *out, int n, int *len, unsigned char c, char q)
+/* One character as C would write it inside quote marks q, into buf (at
+ * least 5 bytes). Bytes C has no name for are written as three octal
+ * digits, which end there, whatever follows. */
+static void escape(char *buf, unsigned char c, char q)
 {
-    char buf[8];
     if (c == '\\' || c == (unsigned char)q) { buf[0] = '\\'; buf[1] = (char)c; buf[2] = 0; }
     else if (c == '\n') strcpy(buf, "\\n");
     else if (c == '\r') strcpy(buf, "\\r");
     else if (c == '\t') strcpy(buf, "\\t");
-    else if (c < 32 || c >= 127) snprintf(buf, sizeof buf, "\\x%02X", c);
+    else if (c < 32 || c >= 127) snprintf(buf, 5, "\\%03o", c);
     else { buf[0] = (char)c; buf[1] = 0; }
+}
+
+static void add_char(char *out, int n, int *len, unsigned char c, char q)
+{
+    char buf[8];
+    escape(buf, c, q);
     add(out, n, len, buf);
 }
 
@@ -40,14 +47,22 @@ int spy_format(char *out, int n, const spy_line *l)
         add(out, n, &len, buf);
     }
     {
-        /* the caller's name, escaped like any string, then fitted to 15 */
-        char name[80];
+        /* the caller's name, escaped like any string, in 15 columns: an
+         * escape that wouldn't fit whole is left out, never cut */
+        char name[20], piece[8];
         int nl = 0;
         const unsigned char *p = (const unsigned char *)(l->task ? l->task : "");
-        name[0] = 0;
-        for (; *p && nl < 60; p++) add_char(name, sizeof name, &nl, *p, ']');
-        snprintf(buf, sizeof buf, "[%-15.15s] %s %s(%d)", name, l->lib ? l->lib : "?", l->func ? l->func : "?",
-                 l->offset);
+        for (; *p; p++) {
+            int pl;
+            escape(piece, *p, ']');
+            pl = (int)strlen(piece);
+            if (nl + pl > 15) break;
+            memcpy(name + nl, piece, (size_t)pl);
+            nl += pl;
+        }
+        while (nl < 15) name[nl++] = ' ';
+        name[nl] = 0;
+        snprintf(buf, sizeof buf, "[%s] %s %s(%d)", name, l->lib ? l->lib : "?", l->func ? l->func : "?", l->offset);
         add(out, n, &len, buf);
     }
     for (i = 0; i < 8; i++) {

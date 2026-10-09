@@ -67,7 +67,7 @@ static void status(struct ProxyBase *b)
     /* what STOP may free, read while nothing else runs */
     Forbid();
     r = b->spy;
-    if ((on = r && r->magic == SPY_MAGIC)) { seq = r->seq; count = r->count; }
+    if ((on = r && r->magic == SPY_MAGIC)) { seq = r->seq - r->seq0; count = r->count; }
     Permit();
     Printf((CONST_STRPTR)"%s %ld.%ld: original %s at $%08lx", (LONG)b->name, (LONG)b->lib.lib_Version,
            (LONG)b->lib.lib_Revision, (LONG)b->private_name, (LONG)b->orig);
@@ -210,7 +210,7 @@ static int save(struct ProxyBase *base[2], BPTR fh)
         struct ProxyBase *b = base[recs[k].lib];
         spy_line l;
         memset(&l, 0, sizeof l);
-        l.seq = e->seq;
+        l.seq = e->seq - ring[recs[k].lib]->seq0;
         l.time_ms = -1;
         if (by_time && freq) {
             unsigned long long d = eclock(e) - first;
