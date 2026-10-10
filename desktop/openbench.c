@@ -18,7 +18,9 @@
  * drawn with the pens the theme obtains.
  *
  * It never leaves the machine without a desktop: Shift held as it starts, or a start that fails, runs
- * C:LoadWB instead (the design's proxy rule, section 4).
+ * C:LoadWB instead (the design's proxy rule, section 4). A machine whose OpenRTG reports no RTG (no
+ * openrtg.library, or a Workbench screen that isn't a true-colour RTG one) gets Workbench as usual
+ * (the user, 11 October 2026). OpenBench patches nothing.
  *
  * Next (the user's order): workbench.library's entries (OpenWorkbenchObject, AppIcons, AppWindows,
  * AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them; then drag and drop between windows
@@ -81,6 +83,9 @@ static struct Library *CyberGfxBase;
     LP10(0x7e, ULONG, WritePixelArray, APTR, (src), a0, UWORD, (sx), d0, UWORD, (sy), d1, UWORD, (mod), d2, \
          struct RastPort *, (rp), a1, UWORD, (dx), d3, UWORD, (dy), d4, UWORD, (w), d5, UWORD, (h), d6, UBYTE, (fmt), d7, , CyberGfxBase)
 #define RECTFMT_ARGB 2
+#define CGX_MAPATTR(bm, a) LP2(0x60, ULONG, GetCyberMapAttr, struct BitMap *, (bm), a0, ULONG, (a), d0, , CyberGfxBase)
+#define CYBRMATTR_DEPTH 0x80000007UL
+#define CYBRMATTR_ISCYBERGFX 0x80000008UL
 
 /* The windows run on 32 KB, however OpenBench is started (Run in the Startup-Sequence gives the boot
  * Shell's stack): libnix's __stack where its swap works, else a process of our own (as OpenDrawer). */
@@ -817,6 +822,17 @@ static void run_loadwb(void)
 
 /* ---- the run --------------------------------------------------------------------------------- */
 
+/* 1 when OpenRTG reports RTG here: openrtg.library is there, and the Workbench screen is one of its
+ * true-colour screens (cybergraphics: a CyberGraphX bitmap deeper than 8 bits). */
+static int rtg_here(struct Screen *s)
+{
+    struct Library *ortg = OpenLibrary((CONST_STRPTR)"openrtg.library", 0);
+    struct BitMap *bm = s ? s->RastPort.BitMap : NULL;
+    if (!ortg) return 0;
+    CloseLibrary(ortg);
+    return CyberGfxBase && bm && CGX_MAPATTR(bm, CYBRMATTR_ISCYBERGFX) && CGX_MAPATTR(bm, CYBRMATTR_DEPTH) > 8;
+}
+
 static void redraw_all(void)
 {
     int i;
@@ -982,6 +998,10 @@ static int run(void)
     if (!(launch_port = CreateMsgPort())) goto out;
     if ((picture_sig = AllocSignal(-1)) < 0) goto out;
     if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
+    if (!rtg_here(look.scr)) {
+        if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
+        goto out;                                  /* ok stays 0: LoadWB */
+    }
     load_theme(&mode);
     if (!ogt_ctx_init(&ctx, look.scr, &theme, mode) && !ogt_ctx_init(&ctx, look.scr, &theme, OGT_LIGHT)) goto out;
     look.ctx = &ctx;
