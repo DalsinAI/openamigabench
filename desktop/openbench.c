@@ -74,7 +74,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.3"
+#define OPENBENCH_VERSION "0.1.4"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -269,7 +269,11 @@ struct backfill_msg { struct Layer *layer; struct Rectangle bounds; LONG ox, oy;
  * in the Workbench screen's own format (PDTA_Remap, DTM_PROCLAYOUT), kept with its object, and blitted
  * centred at its own size, the theme's gradient round it. 0.1 to 0.1.2 read the picture's pixels as
  * ARGB instead (PMODE_V43, PDTM_READPIXELARRAY) and scaled them; on Instance-32 that path wrote to a
- * wild address within seconds, twice, while IPrefs' route has drawn the same picture every boot. */
+ * wild address within seconds, twice, while IPrefs' route has drawn the same picture every boot. The
+ * crashing loop was found in Hyperion's picture.datatype (its RGB to ARGB conversion for READPIXELARRAY,
+ * SYS:Classes/DataTypes/picture.datatype at 44402): OpenBench never asks it for a pixel array. 0.1.4:
+ * PMODE_V43 with the remap, as IPrefs asks, so a true-colour screen gets the picture in true colour
+ * (0.1.3 got it dithered to pens). */
 static Object *volatile pic_obj;
 static struct BitMap *volatile pic_bm;
 static volatile LONG pic_w, pic_h;
@@ -377,7 +381,8 @@ static void picture_entry(void)
     struct BitMap *bm = NULL;
     struct BitMapHeader *bmh = NULL;
     if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
-                                          PDTA_Remap, TRUE, OBP_Precision, PRECISION_IMAGE, TAG_DONE))) {
+                                          PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43, OBP_Precision, PRECISION_IMAGE,
+                                          TAG_DONE))) {
         struct gpLayout gl;
         gl.MethodID = DTM_PROCLAYOUT;
         gl.gpl_GInfo = NULL;
