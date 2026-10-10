@@ -12,7 +12,8 @@
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date.
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
- * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens. The backdrop is a
+ * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
+ * screens live on the graphics card and chip RAM is hardly used: its own buffers come from fast RAM. The backdrop is a
  * screen-sized ARGB picture written with cybergraphics, icons are drawn with their alpha, colours are the
  * theme's exact ones. A palette screen (AGA) is the fallback: the backdrop is then pen 0 and the rest is
  * drawn with the pens the theme obtains.
@@ -64,13 +65,14 @@
 #include <proto/input.h>
 #include <inline/macros.h>
 
+#include "obmsg.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1"
+#define OPENBENCH_VERSION "0.1.1"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -291,7 +293,7 @@ static ULONG bf_entry(register struct Hook *h __asm("a0"), register struct RastP
 /* The theme's desktop gradient, top to bottom, until the picture is ready (or without one). */
 static ULONG *gradient_backdrop(LONG w, LONG h)
 {
-    ULONG *b = AllocVec((ULONG)w * h * 4, MEMF_ANY);
+    ULONG *b = AllocVec((ULONG)w * h * 4, MEMF_FAST);
     ogt_grad g;
     LONG y, x;
     if (!b) return NULL;
@@ -356,24 +358,33 @@ static ULONG *scale_picture(const char *path, LONG W, LONG H)
     GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
     sw = bmh ? bmh->bmh_Width : 0;
     sh = bmh ? bmh->bmh_Height : 0;
-    if (sw > 0 && sh > 0 && sw <= 8192 && sh <= 8192 && (src = AllocVec((ULONG)sw * sh * 4, MEMF_ANY))) {
+    if (sw > 0 && sh > 0 && sw <= 8192 && sh <= 8192 && (src = AllocVec((ULONG)sw * 4, MEMF_FAST))) {
         struct pdtBlitPixelArray m;
-        m.MethodID = PDTM_READPIXELARRAY;
-        m.pbpa_PixelData = src;
-        m.pbpa_PixelFormat = PBPAFMT_ARGB;
-        m.pbpa_PixelArrayMod = (ULONG)sw * 4;
-        m.pbpa_Left = 0;
-        m.pbpa_Top = 0;
-        m.pbpa_Width = (ULONG)sw;
-        m.pbpa_Height = (ULONG)sh;
-        if (DoDTMethodA(o, NULL, NULL, (Msg)&m) && (dst = AllocVec((ULONG)W * H * 4, MEMF_ANY))) {
+        /* One source row at a time (0.1.1): a read of the whole picture at once wrote its pixels to a
+         * wild address on Instance-32 (the JIT's report at boot, 11 October 2026: the backdrop's own
+         * grey going to $2C40), as OpenUpTool's row reads never did. */
+        if ((dst = AllocVec((ULONG)W * H * 4, MEMF_FAST))) {
+            LONG have = -1;
             if (W * sh > H * sw) { vw = sw; vh = H * sw / W; }      /* the screen is wider: the picture's width */
             else { vh = sh; vw = W * sh / H; }
             ox = (sw - vw) / 2;
             oy = (sh - vh) / 2;
             for (y = 0; y < H; y++) {
-                ULONG *row = dst + y * W, *s = src + (oy + y * vh / H) * sw + ox;
-                for (x = 0; x < W; x++) row[x] = s[x * vw / W];
+                ULONG *row = dst + y * W;
+                LONG sy = oy + y * vh / H;
+                if (sy != have) {
+                    m.MethodID = PDTM_READPIXELARRAY;
+                    m.pbpa_PixelData = src;
+                    m.pbpa_PixelFormat = PBPAFMT_ARGB;
+                    m.pbpa_PixelArrayMod = (ULONG)sw * 4;
+                    m.pbpa_Left = 0;
+                    m.pbpa_Top = (ULONG)sy;
+                    m.pbpa_Width = (ULONG)sw;
+                    m.pbpa_Height = 1;
+                    if (!DoDTMethodA(o, NULL, NULL, (Msg)&m)) { FreeVec(dst); dst = NULL; break; }
+                    have = sy;
+                }
+                for (x = 0; x < W; x++) row[x] = src[ox + x * vw / W];
             }
         }
     }
@@ -523,8 +534,7 @@ static void scan_volumes(void)
         snprintf(ic->path, sizeof ic->path, "%s:", ic->name);
         snprintf(ip, sizeof ip, "%s:Disk", ic->name);
         ic->selected = 0;
-        ic->dobj = GetIconTags((CONST_STRPTR)ip, ICONGETA_FailIfUnavailable, FALSE, ICONGETA_GetDefaultType, WBDISK,
-                               ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        ic->dobj = GetIconTags((CONST_STRPTR)ip, ICONGETA_FailIfUnavailable, FALSE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
         ic->w = 48; ic->h = 40;
         r.MinX = r.MinY = 0;
         if (ic->dobj && GetIconRectangle(root->RPort, ic->dobj, NULL, &r, ICONDRAWA_Borderless, TRUE, TAG_DONE)) {
@@ -820,6 +830,53 @@ static void run_loadwb(void)
     }
 }
 
+/* ---- the dock: OpenDock's code, built in (the user, 11 October 2026: "integrate the dock into
+ * OpenWorkbench and not as a separate app") ------------------------------------------------------
+ *
+ * It runs as a process of OpenBench's own, its window just above the backdrop, and starts things
+ * through OpenBench (obmsg.h). An OpenDock started on its own (S:User-Startup) is asked to quit first. */
+int opendock_main(void);
+static struct Task *volatile dock_task;
+static BYTE dock_sig = -1;
+
+static void dock_entry(void)
+{
+    Forbid();
+    dock_task = FindTask(NULL);
+    Permit();
+    opendock_main();
+    Forbid();
+    dock_task = NULL;
+    Signal(main_task, 1UL << dock_sig);
+    /* ends in dos.library under Forbid */
+}
+
+static void start_dock(void)
+{
+    struct MsgPort *p;
+    int i;
+    for (i = 0; i < 30; i++) {                     /* the separate OpenDock: asked to go, 3 s at most */
+        Forbid();
+        if ((p = FindPort((CONST_STRPTR)"OpenDock"))) Signal(p->mp_SigTask, SIGBREAKF_CTRL_C);
+        Permit();
+        if (!p) break;
+        Delay(5);
+    }
+    if (i == 30 || dock_sig < 0) return;
+    if (!CreateNewProcTags(NP_Entry, (ULONG)dock_entry, NP_StackSize, 32768, NP_Name, (ULONG)"OpenBench Dock", TAG_DONE))
+        return;
+    for (i = 0; i < 50 && !dock_task; i++) Delay(1);
+}
+
+static void stop_dock(void)
+{
+    int i;
+    Forbid();
+    if (dock_task) Signal((struct Task *)dock_task, SIGBREAKF_CTRL_C);
+    Permit();
+    for (i = 0; i < 250 && dock_task; i++) Delay(2);
+}
+
 /* ---- the run --------------------------------------------------------------------------------- */
 
 /* 1 when OpenRTG reports RTG here: openrtg.library is there, and the Workbench screen is one of its
@@ -997,6 +1054,7 @@ static int run(void)
     if (!IconBase) goto out;
     if (!(launch_port = CreateMsgPort())) goto out;
     if ((picture_sig = AllocSignal(-1)) < 0) goto out;
+    dock_sig = AllocSignal(-1);
     if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     if (!rtg_here(look.scr)) {
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
@@ -1047,6 +1105,7 @@ static int run(void)
                                NP_Priority, -1, TAG_DONE))
             picture_busy = 0;
     }
+    start_dock();
     run_wbstartup();
 
     /* every two seconds: the title (free memory) */
@@ -1061,12 +1120,22 @@ static int run(void)
 
     for (;;) {
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) |
+                          (1UL << pub->mp_SigBit) | (dock_sig >= 0 ? 1UL << dock_sig : 0) |
                           SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
         struct Message *lm;
         int quit = 0;
         if (sigs & SIGBREAKF_CTRL_C) break;
         while ((lm = GetMsg(launch_port))) launch_done((launch *)lm);
+        while ((lm = GetMsg(pub))) {
+            /* something to open, from the dock or another of the Team's programs (obmsg.h) */
+            struct ob_msg *om = (struct ob_msg *)lm;
+            if (lm->mn_Length >= sizeof *om && om->magic == OB_MSG_MAGIC) {
+                om->path[sizeof om->path - 1] = 0;
+                om->ok = ob_open_object(om->path);
+            }
+            ReplyMsg(lm);
+        }
         if (picture_ready) {
             ULONG *old;
             Forbid();
@@ -1107,6 +1176,7 @@ static int run(void)
     }
 
 out:
+    stop_dock();
     if (timer) {
         AbortIO((struct IORequest *)tr);
         WaitIO((struct IORequest *)tr);
@@ -1145,6 +1215,7 @@ out:
         DeleteMsgPort(launch_port);
     }
     if (picture_sig >= 0) FreeSignal(picture_sig);
+    if (dock_sig >= 0) FreeSignal(dock_sig);
     if (idcmp) DeleteMsgPort(idcmp);
     if (look.font) CloseFont(look.font);
     if (look.ctx) ogt_ctx_free(&ctx);
@@ -1154,10 +1225,14 @@ out:
     if (WorkbenchBase) CloseLibrary(WorkbenchBase);
     if (IconBase) CloseLibrary(IconBase);
     CyberGfxBase = WorkbenchBase = IconBase = NULL;
-    Forbid();
-    RemPort(pub);
-    Permit();
-    DeleteMsgPort(pub);
+    {
+        struct Message *lm;
+        Forbid();
+        RemPort(pub);
+        Permit();
+        while ((lm = GetMsg(pub))) ReplyMsg(lm);   /* ok stays 0: not opened */
+        DeleteMsgPort(pub);
+    }
     if (!ok || quit_to_wb) run_loadwb();            /* never left without a desktop */
     return ok ? RETURN_OK : RETURN_FAIL;
 }
