@@ -591,14 +591,14 @@ static int start_tool(const char *tool, const char *project, LONG stack)
     int n = 1;
     if (!L) return 0;
     if (!(L->args[0].wa_Lock = parent_and_name(tool, L->names[0], sizeof L->names[0]))) { FreeVec(L); return 0; }
-    L->args[0].wa_Name = (BYTE *)L->names[0];
+    L->args[0].wa_Name = (STRPTR)L->names[0];
     if (project) {
         if (!(L->args[1].wa_Lock = parent_and_name(project, L->names[1], sizeof L->names[1]))) {
             UnLock(L->args[0].wa_Lock);
             FreeVec(L);
             return 0;
         }
-        L->args[1].wa_Name = (BYTE *)L->names[1];
+        L->args[1].wa_Name = (STRPTR)L->names[1];
         n = 2;
     }
     if (!(seg = LoadSeg((CONST_STRPTR)tool))) {
