@@ -72,7 +72,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.1"
+#define OPENBENCH_VERSION "0.1.2"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -307,6 +307,13 @@ static ULONG *gradient_backdrop(LONG w, LONG h)
         for (x = 0; x < w; x++) row[x] = p;
     }
     return b;
+}
+
+static int Lock_exists(const char *path)
+{
+    BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
+    if (l) UnLock(l);
+    return l != 0;
 }
 
 /* The root picture IPrefs keeps (ENV:Sys/WBPattern.prefs, a PTRN chunk for WBP_ROOT naming a picture). */
@@ -1099,7 +1106,11 @@ static int run(void)
     ok = 1;
 
     /* the picture, decoded in a process of its own */
-    if (root_picture(picture_path, sizeof picture_path)) {
+    /* 0.1.2: the picture only when ENV:OpenBench/Picture is there. Both 0.1 boots on Instance-32 had a
+     * routine return to a wild address within seconds of the picture's decoding starting (the JIT's
+     * reports: 1920 and 1600, the screen's and the picture's widths, in its registers); without it, the
+     * theme's gradient, until that is found. */
+    if (Lock_exists("ENV:OpenBench/Picture") && root_picture(picture_path, sizeof picture_path)) {
         picture_busy = 1;
         if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
                                NP_Priority, -1, TAG_DONE))
