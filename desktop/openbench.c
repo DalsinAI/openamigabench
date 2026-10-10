@@ -3,9 +3,9 @@
  *
  * The Startup-Sequence runs OpenBench where it ran LoadWB. OpenBench is then the desktop:
  *   - the root window, a backdrop on the Workbench screen: IPrefs' root picture (ENV:Sys/WBPattern.prefs),
- *     scaled to cover the screen and decoded in a process of its own so the desktop shows at once (the
- *     theme's desktop gradient until it is ready); the mounted volumes on it, down the left, at the places
- *     their Disk.info keep;
+ *     rendered the way IPrefs renders it for Workbench, in a process of its own so the desktop shows at
+ *     once, centred over the theme's desktop gradient; the mounted volumes on it, down the left, at the
+ *     places their Disk.info keep;
  *   - drawers, in the drawer windows approved and built as OpenDrawer (opengadtools workbench/wb_drawer);
  *   - starting things as Workbench starts them: a tool with LoadSeg and a WBStartup message, a project
  *     through its default tool, a drawer or disk in a drawer window; SYS:WBStartup at the start;
@@ -52,6 +52,8 @@
 #include <datatypes/datatypes.h>
 #include <datatypes/datatypesclass.h>
 #include <datatypes/pictureclass.h>
+#include <intuition/gadgetclass.h>
+#include <graphics/view.h>
 #include <utility/hooks.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -72,7 +74,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.2"
+#define OPENBENCH_VERSION "0.1.3"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -263,22 +265,40 @@ static struct Hook backfill_hook;
 
 struct backfill_msg { struct Layer *layer; struct Rectangle bounds; LONG ox, oy; };
 
-/* The layer's backfill: the backdrop picture where the damage is. The bounds are the screen's; a
- * RastPort that still has its layer draws in the layer's coordinates. */
+/* The picture, as IPrefs gives Workbench its backdrop (0.1.3): picture.datatype renders it into a bitmap
+ * in the Workbench screen's own format (PDTA_Remap, DTM_PROCLAYOUT), kept with its object, and blitted
+ * centred at its own size, the theme's gradient round it. 0.1 to 0.1.2 read the picture's pixels as
+ * ARGB instead (PMODE_V43, PDTM_READPIXELARRAY) and scaled them; on Instance-32 that path wrote to a
+ * wild address within seconds, twice, while IPrefs' route has drawn the same picture every boot. */
+static Object *volatile pic_obj;
+static struct BitMap *volatile pic_bm;
+static volatile LONG pic_w, pic_h;
+
+/* The layer's backfill, where the damage is: the gradient, then the picture over it. The bounds are
+ * the screen's; a RastPort that still has its layer draws in the layer's coordinates. */
 static ULONG bf_fill(struct RastPort *rp, struct backfill_msg *m)
 {
     struct Rectangle *b = &m->bounds;
-    LONG x0 = b->MinX, y0 = b->MinY, w = b->MaxX - b->MinX + 1, h = b->MaxY - b->MinY + 1, dx = x0, dy = y0;
+    LONG x0 = b->MinX, y0 = b->MinY, w = b->MaxX - b->MinX + 1, h = b->MaxY - b->MinY + 1, lx = 0, ly = 0;
     ULONG *bd = backdrop;
-    if (rp->Layer) { dx -= rp->Layer->bounds.MinX; dy -= rp->Layer->bounds.MinY; }
+    struct BitMap *pb = pic_bm;
+    if (rp->Layer) { lx = rp->Layer->bounds.MinX; ly = rp->Layer->bounds.MinY; }
     if (bd && CyberGfxBase && x0 >= 0 && y0 >= 0 && x0 + w <= bd_w && y0 + h <= bd_h && w > 0 && h > 0) {
-        (void)CGX_WRITE(bd, (UWORD)x0, (UWORD)y0, (UWORD)(bd_w * 4), rp, (UWORD)dx, (UWORD)dy, (UWORD)w, (UWORD)h, RECTFMT_ARGB);
+        (void)CGX_WRITE(bd, (UWORD)x0, (UWORD)y0, (UWORD)(bd_w * 4), rp, (UWORD)(x0 - lx), (UWORD)(y0 - ly), (UWORD)w, (UWORD)h, RECTFMT_ARGB);
     } else {
         struct RastPort copy = *rp;
         SetAPen(&copy, 0);
         SetDrMd(&copy, JAM1);
         copy.AreaPtrn = NULL;
-        RectFill(&copy, dx, dy, dx + w - 1, dy + h - 1);
+        RectFill(&copy, x0 - lx, y0 - ly, x0 - lx + w - 1, y0 - ly + h - 1);
+    }
+    if (pb) {
+        /* the picture centred on the screen, where it meets the damage */
+        LONG pw = pic_w, ph = pic_h, px = (bd_w - pw) / 2, py = (bd_h - ph) / 2;
+        LONG ix0 = x0 > px ? x0 : px, iy0 = y0 > py ? y0 : py;
+        LONG ix1 = x0 + w < px + pw ? x0 + w : px + pw, iy1 = y0 + h < py + ph ? y0 + h : py + ph;
+        if (ix1 > ix0 && iy1 > iy0)
+            BltBitMapRastPort(pb, ix0 - px, iy0 - py, rp, ix0 - lx, iy0 - ly, ix1 - ix0, iy1 - iy0, 0xC0);
     }
     return 0;
 }
@@ -344,70 +364,39 @@ static int root_picture(char *out, int n)
     return 0;
 }
 
-/* The picture decoded and scaled to cover the screen (cut evenly where its shape differs), in a
- * process of its own: decoding a big PNG takes a while on a 68k. */
+/* The picture rendered in a process of its own: decoding a big PNG takes a while on a 68k. */
 static struct Task *main_task;
 static BYTE picture_sig = -1;
-static ULONG *volatile picture_ready;
 static volatile int picture_busy;
 static char picture_path[256];
-
-static ULONG *scale_picture(const char *path, LONG W, LONG H)
-{
-    Object *o;
-    struct BitMapHeader *bmh = NULL;
-    ULONG *src = NULL, *dst = NULL;
-    LONG sw, sh, vw, vh, ox, oy, x, y;
-    if (!(DataTypesBase = OpenLibrary((STRPTR)"datatypes.library", 44)))
-        return NULL;
-    o = NewDTObject((APTR)path, DTA_GroupID, GID_PICTURE, PDTA_Remap, FALSE, PDTA_DestMode, PMODE_V43, TAG_DONE);
-    if (!o) goto out;
-    GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
-    sw = bmh ? bmh->bmh_Width : 0;
-    sh = bmh ? bmh->bmh_Height : 0;
-    if (sw > 0 && sh > 0 && sw <= 8192 && sh <= 8192 && (src = AllocVec((ULONG)sw * 4, MEMF_FAST))) {
-        struct pdtBlitPixelArray m;
-        /* One source row at a time (0.1.1): a read of the whole picture at once wrote its pixels to a
-         * wild address on Instance-32 (the JIT's report at boot, 11 October 2026: the backdrop's own
-         * grey going to $2C40), as OpenUpTool's row reads never did. */
-        if ((dst = AllocVec((ULONG)W * H * 4, MEMF_FAST))) {
-            LONG have = -1;
-            if (W * sh > H * sw) { vw = sw; vh = H * sw / W; }      /* the screen is wider: the picture's width */
-            else { vh = sh; vw = W * sh / H; }
-            ox = (sw - vw) / 2;
-            oy = (sh - vh) / 2;
-            for (y = 0; y < H; y++) {
-                ULONG *row = dst + y * W;
-                LONG sy = oy + y * vh / H;
-                if (sy != have) {
-                    m.MethodID = PDTM_READPIXELARRAY;
-                    m.pbpa_PixelData = src;
-                    m.pbpa_PixelFormat = PBPAFMT_ARGB;
-                    m.pbpa_PixelArrayMod = (ULONG)sw * 4;
-                    m.pbpa_Left = 0;
-                    m.pbpa_Top = (ULONG)sy;
-                    m.pbpa_Width = (ULONG)sw;
-                    m.pbpa_Height = 1;
-                    if (!DoDTMethodA(o, NULL, NULL, (Msg)&m)) { FreeVec(dst); dst = NULL; break; }
-                    have = sy;
-                }
-                for (x = 0; x < W; x++) row[x] = src[ox + x * vw / W];
-            }
-        }
-    }
-    DisposeDTObject(o);
-out:
-    if (src) FreeVec(src);
-    CloseLibrary(DataTypesBase);
-    DataTypesBase = NULL;
-    return dst;
-}
+static struct Screen *picture_scr;
 
 static void picture_entry(void)
 {
-    ULONG *p = scale_picture(picture_path, bd_w, bd_h);
+    Object *o = NULL;
+    struct BitMap *bm = NULL;
+    struct BitMapHeader *bmh = NULL;
+    if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
+                                          PDTA_Remap, TRUE, OBP_Precision, PRECISION_IMAGE, TAG_DONE))) {
+        struct gpLayout gl;
+        gl.MethodID = DTM_PROCLAYOUT;
+        gl.gpl_GInfo = NULL;
+        gl.gpl_Initial = TRUE;
+        if (DoDTMethodA(o, NULL, NULL, (Msg)&gl))
+            GetDTAttrs(o, PDTA_DestBitMap, (ULONG)&bm, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
+        if (!bm || !bmh || bmh->bmh_Width <= 0 || bmh->bmh_Height <= 0) {
+            DisposeDTObject(o);
+            o = NULL;
+            bm = NULL;
+        }
+    }
     Forbid();
-    picture_ready = p;
+    if (o) {
+        pic_w = bmh->bmh_Width;
+        pic_h = bmh->bmh_Height;
+        pic_obj = o;
+        pic_bm = bm;
+    }
     picture_busy = 0;
     Signal(main_task, 1UL << picture_sig);
     /* ends in dos.library under Forbid: OpenBench waits for picture_busy before it goes */
@@ -1106,11 +1095,10 @@ static int run(void)
     ok = 1;
 
     /* the picture, decoded in a process of its own */
-    /* 0.1.2: the picture only when ENV:OpenBench/Picture is there. Both 0.1 boots on Instance-32 had a
-     * routine return to a wild address within seconds of the picture's decoding starting (the JIT's
-     * reports: 1920 and 1600, the screen's and the picture's widths, in its registers); without it, the
-     * theme's gradient, until that is found. */
-    if (Lock_exists("ENV:OpenBench/Picture") && root_picture(picture_path, sizeof picture_path)) {
+    /* the picture: IPrefs' root picture, rendered in a process of its own (0.1.3); ENV:OpenBench/NoPicture: none */
+    if (!Lock_exists("ENV:OpenBench/NoPicture") && root_picture(picture_path, sizeof picture_path) &&
+        (DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 44))) {
+        picture_scr = look.scr;
         picture_busy = 1;
         if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
                                NP_Priority, -1, TAG_DONE))
@@ -1147,14 +1135,7 @@ static int run(void)
             }
             ReplyMsg(lm);
         }
-        if (picture_ready) {
-            ULONG *old;
-            Forbid();
-            old = backdrop;
-            backdrop = picture_ready;
-            picture_ready = NULL;
-            Permit();
-            if (old) FreeVec(old);
+        if ((sigs & (1UL << picture_sig)) && pic_bm) {
             EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
             draw_icons();
         }
@@ -1197,7 +1178,6 @@ out:
     if (tport) DeleteMsgPort(tport);
     while (ndrawers) close_index(ndrawers - 1);
     while (picture_busy) Delay(5);                  /* the picture's process is in our code */
-    if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
     if (root) {
         ClearMenuStrip(root);
         {
@@ -1216,6 +1196,12 @@ out:
     if (dri) FreeScreenDrawInfo(look.scr, dri);
     free_icons();
     if (backdrop) { FreeVec(backdrop); backdrop = NULL; }
+    if (pic_obj) {
+        pic_bm = NULL;
+        DisposeDTObject(pic_obj);
+        pic_obj = NULL;
+    }
+    if (DataTypesBase) { CloseLibrary(DataTypesBase); DataTypesBase = NULL; }
     if (launch_port) {
         /* tools still running keep their code until they end: wait for them */
         while (running) {
