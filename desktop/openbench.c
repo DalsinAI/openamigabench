@@ -13,6 +13,10 @@
  *     natively"; Kestrel, Wren and Finch): Look, Windows, TitleBar, Menus, OpenDock's editor, OpenDateTime,
  *     OpenGamepads, OpenInput, OpenSound, OpenTypes, OpenUp-Setup and OpenSerial run as processes of OpenBench's
  *     when opened from SYS:Prefs (ob_builtin.c, ob_builtin_list.h);
+ *   - Tata built in (0.1.15; the Team, 11 October 2026: Tata a built-in feature of OpenBench): before OpenBench
+ *     runs a program or opens a project it asks Tata's own inspection, linked in (openamigatata
+ *     src/tata_inspect.c), and runs it, asks Tata's question, or refuses; no patch. Tata's window is a built-in,
+ *     SYS:Prefs/OpenTata. C:Tata's patches stay for every other program, and the question is asked once;
  *   - Information (0.1.13, ob_info.c): its own window for any icon, a drawer's or the desktop's (Icons >
  *     Information...), as workbench.library's WBInfo() does nothing while Workbench isn't running;
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
@@ -81,13 +85,16 @@
 #include "barlogo.h"
 #include "ob_builtin.h"
 #include "ob_info.h"
+#ifdef OB_HAVE_TATA
+#include "tata_inspect.h"
+#endif
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.14"
+#define OPENBENCH_VERSION "0.1.15"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -861,11 +868,25 @@ static int ob_info_object(const char *path)
     return ob_info_open(look.scr, path);
 }
 
+/* 1 while SYS:WBStartup is being started: Tata applies "always" and "never" then, and asks nothing */
+static int starting_up;
+
+/* Tata, built in (tata_inspect.h): 1 to go ahead with the program (data 0) or the project (data 1) */
+static int tata_lets(const char *path, int data)
+{
+#ifdef OB_HAVE_TATA
+    return tata_inspect(path, data, starting_up);
+#else
+    (void)path; (void)data;
+    return 1;
+#endif
+}
+
 static int ob_open_object(const char *path)
 {
     struct DiskObject *o;
     int ok = 0;
-    if (ob_builtin_open(path)) return 1;          /* built into OpenBench (ob_builtin_list.h) */
+    if (ob_builtin_open(path)) return 1;          /* built into OpenBench (ob_builtin_list.h): ours, never asked about */
     o = GetIconTags((CONST_STRPTR)path, ICONGETA_FailIfUnavailable, TRUE, TAG_DONE);
     if (!o) {
         BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
@@ -875,18 +896,18 @@ static int ob_open_object(const char *path)
         if (fib) FreeDosObject(DOS_FIB, fib);
         if (l) UnLock(l);
         if (dir) return open_drawer(path);
-        return is_program(path) ? start_tool(path, NULL, 8192) : 0;
+        return is_program(path) && tata_lets(path, 0) ? start_tool(path, NULL, 8192) : 0;
     }
     switch (o->do_Type) {
     case WBDISK: case WBDRAWER: case WBGARBAGE:
         ok = open_drawer(path);
         break;
     case WBTOOL:
-        ok = start_tool(path, NULL, o->do_StackSize);
+        ok = tata_lets(path, 0) && start_tool(path, NULL, o->do_StackSize);
         break;
     case WBPROJECT: {
         char tool[300];
-        if (find_tool(path, (const char *)o->do_DefaultTool, tool, sizeof tool))
+        if (find_tool(path, (const char *)o->do_DefaultTool, tool, sizeof tool) && tata_lets(tool, 0) && tata_lets(path, 1))
             ok = start_tool(tool, path, o->do_StackSize);
         break;
     }
@@ -901,6 +922,7 @@ static void run_wbstartup(void)
     BPTR l = Lock((CONST_STRPTR)"SYS:WBStartup", ACCESS_READ);
     struct FileInfoBlock *fib;
     if (!l) return;
+    starting_up = 1;
     if ((fib = AllocDosObject(DOS_FIB, NULL))) {
         if (Examine(l, fib))
             while (ExNext(l, fib)) {
@@ -912,6 +934,7 @@ static void run_wbstartup(void)
             }
         FreeDosObject(DOS_FIB, fib);
     }
+    starting_up = 0;
     UnLock(l);
 }
 
@@ -1343,6 +1366,9 @@ static int run(void)
 
 out:
     ob_builtin_quit_all();                      /* the built-ins first: their code is ours */
+#ifdef OB_HAVE_TATA
+    tata_inspect_end();
+#endif
     ob_info_quit_all();                         /* and the Information windows' (they close without saving) */
     stop_dock();
     if (timer) {
