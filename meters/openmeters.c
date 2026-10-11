@@ -71,7 +71,7 @@
 #include "ogt_theme.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2"
+#define OPENMETERS_VERSION "0.2.1"
 static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct IntuitionBase *IntuitionBase;
@@ -885,7 +885,11 @@ static int behind_stale(void)
         count++;
     }
     FreeVec(now);
-    return count && diff / count / 3 > 14;
+    /* 0.2.1: more than 3 a channel on average. It was 14, and the backdrop drawn before its picture (the theme's blue
+     * grey) and the picture (a light grey) differ by about that much beside the panel's top right place, so the panel
+     * kept the blue it was made from (the user, 08:02: "not picking up picture, rather pre-load blue screen"). The
+     * line is the screen itself, read twice: unchanged, it is the same to the pixel. */
+    return count && diff / count / 3 > 3;
 }
 
 /* ---- opening and closing ---------------------------------------------------------------------- */
