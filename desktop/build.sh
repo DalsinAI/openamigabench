@@ -29,6 +29,82 @@ TMP=$(mktemp -d)
 BUILTIN_OBJS=""
 BUILTIN_DEFS=""
 # --- built-ins: begin ---
+# Look: OpenPrefs Look (openamigaprefs Look/src/look.c), SYS:Prefs/Look; its theme reader is lib/ogt_theme.c, linked below
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$L" -I"$C" -DIN_OPENBENCH -Dmain=look_main -c -o "$TMP/look.o" "$OAP/Look/src/look.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/look.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_LOOK"
+# Menus: OpenPrefs Menus, OpenMenus' editor (openamigaprefs Menus/src/menus.c), SYS:Prefs/Menus; its theme
+# reader is lib/ogt_theme.c, linked below. OpenMenus' settings code (om_prefs.c) is compiled and linked once for
+# every built-in that reads it: a block that needs it repeats these two lines. OpenMenus itself (Menus/engine,
+# with om_kbd.c) is a background program, not an editor: it isn't built in.
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$OAP/Menus/src" -I"$L" -DIN_OPENBENCH -Dmain=menusprefs_main -c -o "$TMP/menus.o" "$OAP/Menus/src/menus.c"
+# shellcheck disable=SC2086
+[ -f "$TMP/om_prefs.o" ] || "$CC" $FLAGS -I"$OAP/Menus/src" -c -o "$TMP/om_prefs.o" "$OAP/Menus/src/om_prefs.c"
+case " $BUILTIN_OBJS " in *" $TMP/om_prefs.o "*) ;; *) BUILTIN_OBJS="$BUILTIN_OBJS $TMP/om_prefs.o" ;; esac
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/menus.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_MENUS"
+# OpenDateTime (openamigaprefs DateTime/src): SYS:Prefs/OpenDateTime
+DT="$OAP/DateTime/src"
+# shellcheck disable=SC2086
+"$CC" $FLAGS -DIN_OPENBENCH -Dmain=opendatetime_main -c -o "$TMP/opendatetime.o" "$DT/opendatetime.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/opendatetime.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENDATETIME"
+# OpenDock: the dock's editor (openamigaprefs Dock/src/dockprefs.c), SYS:Prefs/OpenDock; entry dockprefs_main,
+# as opendock_main is the dock's. Its settings code is the dock's od_dock.o, linked below.
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$D" -DIN_OPENBENCH -Dmain=dockprefs_main -c -o "$TMP/dockprefs.o" "$D/dockprefs.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/dockprefs.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENDOCK"
+# OpenGamepads (openamigaprefs Gamepads/src, with its copy of openinput.library's headers): SYS:Prefs/OpenGamepads
+GP="$OAP/Gamepads"
+for f in gamepads gp_core gp_pad gp_draw; do
+    # shellcheck disable=SC2086
+    "$CC" $FLAGS -I"$GP/src" -I"$GP/include" -DIN_OPENBENCH -Dmain=opengamepads_main -c -o "$TMP/opengamepads_$f.o" "$GP/src/$f.c"
+    BUILTIN_OBJS="$BUILTIN_OBJS $TMP/opengamepads_$f.o"
+done
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENGAMEPADS"
+# OpenInput (openamigaprefs Input/src; Common/obmsg.h for its Gamepads...): SYS:Prefs/OpenInput
+INP="$OAP/Input/src"
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$C" -DIN_OPENBENCH -Dmain=openinput_main -c -o "$TMP/openinput.o" "$INP/openinput.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/openinput.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENINPUT"
+# OpenSerial: the serial port's editor (openamigaprefs Serial/src/openserial.c), SYS:Prefs/OpenSerial
+# shellcheck disable=SC2086
+"$CC" $FLAGS -DIN_OPENBENCH -Dmain=openserial_main -c -o "$TMP/openserial.o" "$OAP/Serial/src/openserial.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/openserial.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENSERIAL"
+# OpenSound (openamigaprefs Sound/src, the editor: sound.c and its sp_*.c; not OpenSpeaker): SYS:Prefs/OpenSound
+SND="$OAP/Sound/src"
+for f in sound sp_core sp_amiga sp_test; do
+    # shellcheck disable=SC2086
+    "$CC" $FLAGS -I"$SND" -I"$C" -DIN_OPENBENCH -Dmain=opensound_main -c -o "$TMP/opensound_$f.o" "$SND/$f.c"
+    BUILTIN_OBJS="$BUILTIN_OBJS $TMP/opensound_$f.o"
+done
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENSOUND"
+# OpenTypes: which program opens each kind of file (openamigaprefs OpenTypes/src/opentypes.c), SYS:Prefs/OpenTypes
+# shellcheck disable=SC2086
+"$CC" $FLAGS -DIN_OPENBENCH -Dmain=opentypes_main -c -o "$TMP/opentypes.o" "$OAP/OpenTypes/src/opentypes.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/opentypes.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENTYPES"
+# OpenUp-Setup: the first-start wizard (openamigaprefs Setup/src/setup.c), SYS:Prefs/OpenUp-Setup, and
+# SYS:WBStartup/OpenUp-Setup at the first start
+# shellcheck disable=SC2086
+"$CC" $FLAGS -DIN_OPENBENCH -Dmain=openup_setup_main -c -o "$TMP/openup_setup.o" "$OAP/Setup/src/setup.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/openup_setup.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENUP_SETUP"
+# TitleBar: OpenPrefs Title bar (openamigaprefs TitleBar/src/titlebar.c), SYS:Prefs/TitleBar
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$OAP/TitleBar/src" -I"$C" -DIN_OPENBENCH -Dmain=titlebar_main -c -o "$TMP/titlebar.o" "$OAP/TitleBar/src/titlebar.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/titlebar.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_TITLEBAR"
+# Windows: OpenPrefs Windows (openamigaprefs Windows/src/windows.c), SYS:Prefs/Windows
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$C" -DIN_OPENBENCH -Dmain=windows_main -c -o "$TMP/windows.o" "$OAP/Windows/src/windows.c"
+BUILTIN_OBJS="$BUILTIN_OBJS $TMP/windows.o"
+BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_WINDOWS"
 # --- built-ins: end ---
 # shellcheck disable=SC2086
 "$CC" $FLAGS $BUILTIN_DEFS -I"$HERE" -c -o "$TMP/ob_builtin.o" "$HERE/ob_builtin.c"
