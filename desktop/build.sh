@@ -35,7 +35,10 @@ BUILTIN_DEFS=""
 # shellcheck disable=SC2086
 "$CC" $FLAGS -c -o "$TMP/ob_malloc.o" "$HERE/ob_malloc.c"
 # shellcheck disable=SC2086
-"$CC" $FLAGS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" $BUILTIN_OBJS \
+# shellcheck disable=SC2086
+"$CC" $FLAGS -c -o "$TMP/ob_info.o" "$HERE/ob_info.c"
+# shellcheck disable=SC2086
+"$CC" $FLAGS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS \
     "$W/wb_drawer.c" "$W/wb_dir.c" "$W/wb_fmt.c" "$W/wb_pic.c" "$W/wb_glyph.c" \
     "$L/ogt_theme.c" "$L/ogt_draw.c" "$L/ogt_icons.c" "$L/ogt_font.c" "$TMP/opendock.o" "$TMP/od_dock.o" -lamiga
 rm -rf "$TMP"

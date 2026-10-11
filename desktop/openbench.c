@@ -9,6 +9,8 @@
  *   - drawers, in the drawer windows approved and built as OpenDrawer (opengadtools workbench/wb_drawer);
  *   - starting things as Workbench starts them: a tool with LoadSeg and a WBStartup message, a project
  *     through its default tool, a drawer or disk in a drawer window; SYS:WBStartup at the start;
+ *   - Information (0.1.13, ob_info.c): its own window for any icon, a drawer's or the desktop's (Icons >
+ *     Information...), as workbench.library's WBInfo() does nothing while Workbench isn't running;
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
  *     "+ 8 (m68k)" when the CPU cores board is fitted ("+ 8 (m68k, x86-64)" when its cores run native jobs
  *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
@@ -74,13 +76,14 @@
 #include "obmsg.h"
 #include "barlogo.h"
 #include "ob_builtin.h"
+#include "ob_info.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.12"
+#define OPENBENCH_VERSION "0.1.13"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -849,6 +852,11 @@ static int find_tool(const char *project, const char *tool, char *out, int n)
 
 /* Opens anything as Workbench would: a disk, drawer or trashcan in a drawer window; a tool runs; a
  * project opens with its default tool; a program with no icon runs. 1 when done. */
+static int ob_info_object(const char *path)
+{
+    return ob_info_open(look.scr, path);
+}
+
 static int ob_open_object(const char *path)
 {
     struct DiskObject *o;
@@ -932,7 +940,7 @@ static void titles_everywhere(void)
 
 /* ---- menus ---------------------------------------------------------------------------------- */
 
-enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT };
+enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO };
 
 static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"OpenBench", NULL, 0, 0, NULL },
@@ -944,6 +952,9 @@ static struct NewMenu newmenus[] = {
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Quit to Workbench...", NULL, 0, 0, (APTR)M_LOADWB },
     { NM_ITEM, (STRPTR)"Quit OpenBench...", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
+    { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
+    { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
     { NM_END, NULL, NULL, 0, 0, NULL }
 };
 
@@ -1124,6 +1135,16 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             ULONG id = it ? (ULONG)GTMENUITEM_USERDATA(it) : 0;
             switch (id) {
             case M_SHELL: new_shell(); break;
+            case M_ICON_OPEN:
+            case M_ICON_INFO: {
+                int i;
+                for (i = 0; i < nicons; i++)
+                    if (icons[i].selected) {
+                        if (id == M_ICON_OPEN) open_drawer(icons[i].path);
+                        else if (!ob_info_open(look.scr, icons[i].path)) DisplayBeep(look.scr);
+                    }
+                break;
+            }
             case M_REDRAW: redraw_all(); break;
             case M_UPDATE:
                 scan_volumes();
@@ -1205,6 +1226,7 @@ static int run(void)
     if (!(idcmp = CreateMsgPort())) goto out;
     look.port = idcmp;
     look.open_object = ob_open_object;
+    look.info_object = ob_info_object;
     count_boards();
     make_title();
     look.screen_title = screen_title;
@@ -1317,6 +1339,7 @@ static int run(void)
 
 out:
     ob_builtin_quit_all();                      /* the built-ins first: their code is ours */
+    ob_info_quit_all();                         /* and the Information windows' (they close without saving) */
     stop_dock();
     if (timer) {
         AbortIO((struct IORequest *)tr);
