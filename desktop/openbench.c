@@ -68,13 +68,14 @@
 #include <inline/macros.h>
 
 #include "obmsg.h"
+#include "ob_png.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.4"
+#define OPENBENCH_VERSION "0.1.5"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -375,14 +376,62 @@ static volatile int picture_busy;
 static char picture_path[256];
 static struct Screen *picture_scr;
 
+/* The picture's screen-sized twin, when OpenUp put one beside it: "...-1600x1200.png" has
+ * "...-1920x1080.png" for a 1920 x 1080 screen (OpenUpTool BACKDROP names them so). 1 when there is one. */
+static int screen_twin(const char *path, LONG w, LONG h, char *out, int n)
+{
+    int len = (int)strlen(path), i, j;
+    BPTR l;
+    if (len < 9 || strcmp(path + len - 4, ".png")) return 0;
+    for (i = len - 5; i > 0 && ((path[i] >= '0' && path[i] <= '9') || path[i] == 'x'); i--) ;
+    if (path[i] != '-' || i == len - 5) return 0;
+    for (j = i + 1; j < len - 4 && path[j] != 'x'; j++) ;
+    if (j >= len - 4) return 0;
+    snprintf(out, (size_t)n, "%.*s-%ldx%ld.png", i, path, (long)w, (long)h);
+    if (!(l = Lock((CONST_STRPTR)out, ACCESS_READ))) return 0;
+    UnLock(l);
+    return 1;
+}
+
+/* The picture cut and scaled to cover W x H (its middle kept where its shape differs), or itself when
+ * it is that size already. NULL when there is no memory. */
+static ULONG *cover(ULONG *src, LONG sw, LONG sh, LONG W, LONG H)
+{
+    ULONG *dst;
+    LONG vw, vh, ox, oy, x, y;
+    if (sw == W && sh == H) return src;
+    if (!(dst = AllocVec((ULONG)W * H * 4, MEMF_FAST))) return NULL;
+    if (W * sh > H * sw) { vw = sw; vh = H * sw / W; }    /* the screen is wider: the picture's width */
+    else { vh = sh; vw = W * sh / H; }
+    ox = (sw - vw) / 2;
+    oy = (sh - vh) / 2;
+    for (y = 0; y < H; y++) {
+        ULONG *row = dst + y * W, *s = src + (oy + y * vh / H) * sw + ox;
+        for (x = 0; x < W; x++) row[x] = s[x * vw / W];
+    }
+    return dst;
+}
+
+static ULONG *volatile picture_ready;
+
 static void picture_entry(void)
 {
+    char twin[300];
+    LONG pw = 0, ph = 0;
+    ULONG *px = NULL, *done = NULL;
     Object *o = NULL;
     struct BitMap *bm = NULL;
     struct BitMapHeader *bmh = NULL;
-    if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
-                                          PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43, OBP_Precision, PRECISION_IMAGE,
-                                          TAG_DONE))) {
+    /* 0.1.5: a PNG through OpenBench's own reader (ob_png.c), the screen-sized one when there is one */
+    if (screen_twin(picture_path, bd_w, bd_h, twin, sizeof twin)) px = ob_png_load(twin, &pw, &ph);
+    if (!px) px = ob_png_load(picture_path, &pw, &ph);
+    if (px) {
+        done = cover(px, pw, ph, bd_w, bd_h);
+        if (done != px) FreeVec(px);
+    } else if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
+                                                 PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43, OBP_Precision, PRECISION_IMAGE,
+                                                 TAG_DONE))) {
+        /* anything else (IFF, JPEG): as IPrefs renders it, centred */
         struct gpLayout gl;
         gl.MethodID = DTM_PROCLAYOUT;
         gl.gpl_GInfo = NULL;
@@ -396,7 +445,8 @@ static void picture_entry(void)
         }
     }
     Forbid();
-    if (o) {
+    if (done) picture_ready = done;
+    else if (o) {
         pic_w = bmh->bmh_Width;
         pic_h = bmh->bmh_Height;
         pic_obj = o;
@@ -1140,9 +1190,16 @@ static int run(void)
             }
             ReplyMsg(lm);
         }
-        if ((sigs & (1UL << picture_sig)) && pic_bm) {
-            EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
-            draw_icons();
+        if (sigs & (1UL << picture_sig)) {
+            ULONG *old = NULL;
+            Forbid();
+            if (picture_ready) { old = backdrop; backdrop = picture_ready; picture_ready = NULL; }
+            Permit();
+            if (old) FreeVec(old);
+            if (backdrop || pic_bm) {
+                EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+                draw_icons();
+            }
         }
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
@@ -1183,6 +1240,7 @@ out:
     if (tport) DeleteMsgPort(tport);
     while (ndrawers) close_index(ndrawers - 1);
     while (picture_busy) Delay(5);                  /* the picture's process is in our code */
+    if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
     if (root) {
         ClearMenuStrip(root);
         {
