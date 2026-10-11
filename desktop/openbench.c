@@ -75,7 +75,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.6"
+#define OPENBENCH_VERSION "0.1.7"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -720,9 +720,13 @@ static int start_tool(const char *tool, const char *project, LONG stack)
         return 0;
     }
     if (stack < 8192) stack = 8192;
+    /* No input or output, as Workbench starts a tool (Output() is 0 for it). dos's defaults (NIL:, closed
+     * at the end) made every libnix tool fail on quitting with 8700000E, a file closed twice: its startup
+     * puts its own window in pr_CIS/pr_COS and closes it, then dos closed the same handle again. */
     p = CreateNewProcTags(NP_Seglist, (ULONG)seg, NP_FreeSeglist, FALSE, NP_StackSize, (ULONG)stack,
                           NP_Name, (ULONG)L->names[0], NP_CurrentDir, (ULONG)DupLock(L->args[0].wa_Lock),
-                          NP_HomeDir, (ULONG)DupLock(L->args[0].wa_Lock), TAG_DONE);
+                          NP_HomeDir, (ULONG)DupLock(L->args[0].wa_Lock), NP_Input, 0, NP_Output, 0,
+                          NP_CloseInput, FALSE, NP_CloseOutput, FALSE, TAG_DONE);
     if (!p) {
         UnLoadSeg(seg);
         UnLock(L->args[0].wa_Lock);
