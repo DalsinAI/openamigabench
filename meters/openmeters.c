@@ -137,19 +137,28 @@ static int make_icon(void)
     char path[256];
     struct DiskObject *dob;
     int ok = 0;
+    BPTR dir = GetProgramDir();
     if (!IconBase || !GetProgramName((STRPTR)path, sizeof path)) return 0;
-    {   /* beside the program: its directory and name */
-        BPTR dir = GetProgramDir(), old = CurrentDir(dir);
-        if ((dob = GetDefDiskObject(WBTOOL))) {
-            dob->do_ToolTypes = tt;
-            dob->do_CurrentX = NO_ICON_POSITION;
-            dob->do_CurrentY = NO_ICON_POSITION;
-            ok = PutDiskObject(FilePart((STRPTR)path), dob) != 0;
-            dob->do_ToolTypes = NULL;
-            FreeDiskObject(dob);
-        }
-        CurrentDir(old);
+    /* the program's own full name: its directory (the Shell's command may have been given a relative path) */
+    if (dir) {
+        char name[64];
+        strncpy(name, (const char *)FilePart((STRPTR)path), sizeof name - 1);
+        name[sizeof name - 1] = 0;
+        if (NameFromLock(dir, (STRPTR)path, sizeof path)) AddPart((STRPTR)path, (STRPTR)name, sizeof path);
     }
+    dob = IconBase->lib_Version >= 44 ? GetDiskObjectNew((STRPTR)path) : NULL;
+    if (!dob) dob = GetDefDiskObject(WBTOOL);
+    if (dob) {
+        STRPTR *keep = dob->do_ToolTypes;
+        dob->do_Type = WBTOOL;
+        dob->do_ToolTypes = tt;
+        dob->do_CurrentX = NO_ICON_POSITION;
+        dob->do_CurrentY = NO_ICON_POSITION;
+        ok = PutDiskObject((STRPTR)path, dob) != 0;
+        dob->do_ToolTypes = keep;
+        FreeDiskObject(dob);
+    }
+    if (!ok) PrintFault(IoErr(), (STRPTR)path);
     return ok;
 }
 
