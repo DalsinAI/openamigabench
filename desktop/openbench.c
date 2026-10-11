@@ -248,6 +248,7 @@ static void count_boards(void)
 static int make_title(void)
 {
     char chip[16], fast[16], t[sizeof screen_title], pad[BARLOGO_MAX_SPACES + 1];
+    count_boards();                           /* each time: the cores board may give its cores after we start */
     thousands(chip, sizeof chip, AvailMem(MEMF_CHIP) >> 10);
     thousands(fast, sizeof fast, AvailMem(MEMF_FAST) >> 10);
     barlogo_pad(look.scr, pad);               /* made again each time: OpenLook may make the bar taller after we start */
