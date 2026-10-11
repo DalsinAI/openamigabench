@@ -485,7 +485,8 @@ static ULONG *cover_over(ULONG *src, LONG sw, LONG sh, int alpha, const ULONG *g
     b.oy = (sh - b.vh) / 2;
     if (sw == W && sh == H) b.dst = src;
     else if (!(b.dst = bd_alloc((ULONG)W * H * 4))) return NULL;
-    omc_bands(NULL, backdrop_rows, &b, (ULONG)H, b.dst, (ULONG)W * 4, 0, NULL);
+    if (b.dst == src && b.opaque) backdrop_rows(&b, 0, (ULONG)H);   /* only the alpha to set: too little to share */
+    else omc_bands(NULL, backdrop_rows, &b, (ULONG)H, b.dst, (ULONG)W * 4, 0, NULL);
     return b.dst;
 }
 
