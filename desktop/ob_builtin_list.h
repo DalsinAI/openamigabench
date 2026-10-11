@@ -28,6 +28,9 @@ BUILTIN("OpenSerial", openserial_main, 16384)
 #ifdef OB_HAVE_OPENSOUND
 BUILTIN("OpenSound", opensound_main, 32768)
 #endif
+#ifdef OB_HAVE_OPENTATA
+BUILTIN("OpenTata", opentata_main, 32768)           /* Tata's window (openamigatata); Tata's checks are openbench.c's */
+#endif
 #ifdef OB_HAVE_OPENTYPES
 BUILTIN("OpenTypes", opentypes_main, 16384)
 #endif

@@ -84,6 +84,35 @@ for f in sound sp_core sp_amiga sp_test; do
     BUILTIN_OBJS="$BUILTIN_OBJS $TMP/opensound_$f.o"
 done
 BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENSOUND"
+# OpenTata: Tata's window (openamigatata src/prefs/tataprefs.c), SYS:Prefs/OpenTata, with Tata's inspection
+# (src/tata_inspect.c and the code it shares with C:Tata) linked in for openbench.c (OB_HAVE_TATA): before
+# OpenBench runs a program or opens a project it asks Tata itself, with no patch (the Team, 11 October 2026:
+# Tata a built-in feature of OpenBench). From an openamigatata checkout: TATA, default ../../openamigatata;
+# without one OpenBench is built without Tata, and says so. Tata's list helpers are compiled once, here.
+TATA=${TATA:-$HERE/../../openamigatata}
+OB_TATA_DEFS=""
+if [ -f "$TATA/src/tata_inspect.c" ]; then
+    TS="$TATA/src"
+    for f in tata_db tata_files tata_inspect tata_ui; do
+        # shellcheck disable=SC2086
+        "$CC" $FLAGS -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_$f.o" "$TS/$f.c"
+        BUILTIN_OBJS="$BUILTIN_OBJS $TMP/tata_$f.o"
+    done
+    # the hashes at -O1, as Tata's own build.sh (GCC 6.5's -O2 has broken loops of their shape)
+    # shellcheck disable=SC2086
+    "$CC" $(echo $FLAGS | sed 's/-O2/-O1/') -fno-lto -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_hash.o" "$TS/tata_hash.c"
+    # shellcheck disable=SC2086
+    "$CC" $FLAGS -Wno-pointer-sign -I"$TS" -I"$L" -DIN_OPENBENCH -Dmain=opentata_main -c -o "$TMP/opentata.o" "$TS/prefs/tataprefs.c"
+    # its toolbar (the other built-ins draw none: compiled here, once)
+    # shellcheck disable=SC2086
+    "$CC" $FLAGS -I"$L" -c -o "$TMP/ogt_toolbar.o" "$L/ogt_toolbar.c"
+    BUILTIN_OBJS="$BUILTIN_OBJS $TMP/tata_hash.o $TMP/opentata.o $TMP/ogt_toolbar.o"
+    BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENTATA"
+    OB_TATA_DEFS="-DOB_HAVE_TATA -I$TS"
+    echo "OpenBench: Tata built in, from $TATA ($(cd "$TATA" && git rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
+else
+    echo "OpenBench: Tata not built in (no openamigatata at $TATA: set TATA)"
+fi
 # OpenTypes: which program opens each kind of file (openamigaprefs OpenTypes/src/opentypes.c), SYS:Prefs/OpenTypes
 # shellcheck disable=SC2086
 "$CC" $FLAGS -DIN_OPENBENCH -Dmain=opentypes_main -c -o "$TMP/opentypes.o" "$OAP/OpenTypes/src/opentypes.c"
@@ -114,7 +143,7 @@ BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_WINDOWS"
 # shellcheck disable=SC2086
 "$CC" $FLAGS -c -o "$TMP/ob_info.o" "$HERE/ob_info.c"
 # shellcheck disable=SC2086
-"$CC" $FLAGS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS \
+"$CC" $FLAGS $OB_TATA_DEFS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS \
     "$W/wb_drawer.c" "$W/wb_dir.c" "$W/wb_fmt.c" "$W/wb_pic.c" "$W/wb_glyph.c" \
     "$L/ogt_theme.c" "$L/ogt_draw.c" "$L/ogt_icons.c" "$L/ogt_font.c" "$TMP/opendock.o" "$TMP/od_dock.o" -lamiga
 rm -rf "$TMP"
