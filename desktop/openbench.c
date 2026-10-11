@@ -9,6 +9,10 @@
  *   - drawers, in the drawer windows approved and built as OpenDrawer (opengadtools workbench/wb_drawer);
  *   - starting things as Workbench starts them: a tool with LoadSeg and a WBStartup message, a project
  *     through its default tool, a drawer or disk in a drawer window; SYS:WBStartup at the start;
+ *   - the Open preferences built in (0.1.14; the Team, 11 October 2026: "the open preferences into openbench
+ *     natively"; Kestrel, Wren and Finch): Look, Windows, TitleBar, Menus, OpenDock's editor, OpenDateTime,
+ *     OpenGamepads, OpenInput, OpenSound, OpenTypes, OpenUp-Setup and OpenSerial run as processes of OpenBench's
+ *     when opened from SYS:Prefs (ob_builtin.c, ob_builtin_list.h);
  *   - Information (0.1.13, ob_info.c): its own window for any icon, a drawer's or the desktop's (Icons >
  *     Information...), as workbench.library's WBInfo() does nothing while Workbench isn't running;
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
@@ -83,7 +87,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.13"
+#define OPENBENCH_VERSION "0.1.14"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
