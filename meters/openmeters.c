@@ -1,7 +1,22 @@
-/* OpenMeters 0.1: a desktop widget for OpenBench (the Team, 11 October 2026: "we want a widget for the desktop
+/* OpenMeters 0.2: a desktop widget for OpenBench (the Team, 11 October 2026: "we want a widget for the desktop
  * that's like this, run as tooltype", with a picture of one). A small panel on the Workbench screen with the
  * date and time, then a bar for Chip RAM, Fast RAM and the graphics card's video RAM, then a bar for each volume:
  * the label on the left, the bar filled as far as it is used, what is free written in it.
+ *
+ * 0.2 (the Team, 11 October 2026: its background "needs to respond the same way as the dock does"): the panel is
+ * drawn as OpenDock draws its shelf (openamigaprefs Dock/src/opendock.c). It is tinted to the look, dark on a
+ * dark look and light on a light one, from the screen's background where that fits. It is see-through by the
+ * dock's own settings (ENV:OpenDock/Dock: Glass, Solid or Clear, the opacity, the edge), so the desktop shows
+ * through it frosted, with a faint sheen and a lighter rim. Its ends are rounded. The bars are a step from the
+ * panel as it shows, as the dock's group lines are. They are filled in the theme's accent (Look prefs' accent
+ * when it sets one) and in a warning colour over 90 per cent full. Labels are in the theme's text colour, and
+ * the date in its muted one, each made lighter or darker when it would not stand out from the panel. The value
+ * in a bar is in the accent's text colour where the fill is under it.
+ * Like the dock, it follows changes. When the look, its light or dark mode (auto by the hour), the theme or the
+ * dock's settings change, it reads them again and draws itself afresh. When the desktop behind it changes (a new
+ * backdrop, a window that was over its place gone), it copies what is behind it again. When Workbench is reset
+ * (OpenLook's wbclose.h) it closes and comes back with it. Ctrl-F reads the look again.
+ * On a palette screen the panel is the nearest pens, solid, as the dock's is.
  *
  * A tool: started from its icon (or SYS:WBStartup) its tooltypes say how it looks, from a Shell the same words
  * are its arguments:
@@ -19,8 +34,8 @@
  * Video RAM: openrtg.library does not yet say how much of the card's memory is in use, so that bar shows the
  * card's video RAM (the AutoConfig board's size, Dalsin $DA15 product 9 or 15) with no fill.
  *
- * Built so it can join OpenBench's built-ins later (desktop/ob_builtin.h): no C library allocation, every
- * resource freed on the way out. MIT, Copyright (c) 2026 Dalsin Limited. */
+ * Built with opengadtools' theme reader (lib/ogt_theme.c) and openamigaprefs' Common/wbclose.h (meters/build.sh).
+ * Every resource is freed on the way out. MIT, Copyright (c) 2026 Dalsin Limited. */
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <dos/dos.h>
@@ -28,7 +43,9 @@
 #include <dos/rdargs.h>
 #include <devices/timer.h>
 #include <intuition/intuition.h>
+#include <intuition/intuitionbase.h>
 #include <intuition/screens.h>
+#include <graphics/gfx.h>
 #include <graphics/gfxmacros.h>
 #include <graphics/rastport.h>
 #include <utility/date.h>
@@ -38,6 +55,7 @@
 #include <libraries/configvars.h>
 #include <libraries/expansionbase.h>
 #include <libraries/gadtools.h>
+#include <cybergraphx/cybergraphics.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
@@ -46,28 +64,32 @@
 #include <proto/icon.h>
 #include <proto/expansion.h>
 #include <proto/gadtools.h>
+#include <proto/cybergraphics.h>
 #include <string.h>
 #include <stdio.h>
 
-#define OPENMETERS_VERSION "0.1"
+#include "ogt_theme.h"
+#include "wbclose.h"
+
+#define OPENMETERS_VERSION "0.2"
 static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
-struct Library *UtilityBase, *IconBase, *GadToolsBase;
+struct Library *UtilityBase, *IconBase, *GadToolsBase, *CyberGfxBase;
 struct ExpansionBase *ExpansionBase;
 
 #define MAX_ROWS 24
-#define PAD 8                      /* inside the panel's edge */
+#define PAD 12                     /* inside the panel's edge (0.2: room for its rounded ends) */
 #define GAP 8                      /* between a label and its bar */
+#define MAX_RADIUS 16              /* the panel's corners */
 #define PLACE_ENV "ENV:OpenMeters.place"
 #define PLACE_ENVARC "ENVARC:OpenMeters.place"
+#define LOOK_ENV "ENV:OpenGadTools/Look"
+#define DOCK_ENV "ENV:OpenDock/Dock"
+#define THEME_DIR "SYS:Prefs/Presets/Themes/"
 
-enum { C_PANEL, C_EDGE, C_TEXT, C_DIM, C_TRACK, C_TRACK_EDGE, C_MEM, C_VOL, C_FULL, C_COUNT };
-static const ULONG colours[C_COUNT] = {
-    0x26303b, 0x4a5868, 0xe8eef4, 0xb4c0cc, 0x3a4654, 0x1c232b, 0xc84a40, 0x2f9a45, 0xe0662c
-};
-static LONG pens[C_COUNT];
+enum { C_MEM = 1, C_VOL = 2 };     /* a row's kind */
 
 typedef struct {
     char label[32];
@@ -86,6 +108,7 @@ static struct {
 static struct Screen *scr;
 static struct Window *win;
 static struct Menu *menus;
+static APTR vi;
 static struct TextFont *font;
 static row rows[MAX_ROWS];
 static int nrows;
@@ -333,24 +356,387 @@ static void read_all(void)
     if (!opt.novolumes) volume_rows();
 }
 
-/* ---- drawing -------------------------------------------------------------------------------- */
+/* ---- the look: the dock's tint, the theme's colours ------------------------------------------ */
 
-static void get_pens(void)
+typedef struct { int r, g, b; } colour;
+static const colour white = { 255, 255, 255 }, black = { 0, 0, 0 };
+
+static ogt_theme theme;
+static int theme_ok;
+static int look_mode = -1;         /* as the dock reads it: 0 light, 1 dark, -1 no look */
+enum { BG_SOLID, BG_GLASS, BG_CLEAR };
+static int dk_bg = BG_GLASS, dk_opacity = 35, dk_border = 1;   /* the dock's settings: its defaults */
+static colour tint, bg_c, eff;     /* the dock's tint; the screen's background; the panel as it shows */
+static colour c_text, c_dim, c_track, c_fill, c_fill_text, c_full, c_full_text;
+static ULONG look_sig;             /* what the look was read from, to see it change */
+
+static int luma(colour c) { return (c.r * 77 + c.g * 150 + c.b * 29) >> 8; }
+static int apart(colour a, colour b) { int d = luma(a) - luma(b); return d < 0 ? -d : d; }
+
+static colour mix(colour a, colour b, int t)       /* t of 256 parts b */
 {
-    int i;
-    for (i = 0; i < C_COUNT; i++) {
-        ULONG c = colours[i];
-        pens[i] = ObtainBestPen(scr->ViewPort.ColorMap, ((c >> 16) & 255) * 0x01010101UL, ((c >> 8) & 255) * 0x01010101UL,
-                                (c & 255) * 0x01010101UL, OBP_Precision, PRECISION_EXACT, TAG_DONE);
-        if (pens[i] < 0) pens[i] = i == C_PANEL || i == C_TRACK_EDGE ? 1 : 2;
+    colour c;
+    c.r = a.r + (b.r - a.r) * t / 256; c.g = a.g + (b.g - a.g) * t / 256; c.b = a.b + (b.b - a.b) * t / 256;
+    return c;
+}
+
+static colour rgb(ULONG v) { colour c; c.r = (v >> 16) & 255; c.g = (v >> 8) & 255; c.b = v & 255; return c; }
+
+static char *read_file(const char *path)
+{
+    BPTR fh = Open((STRPTR)path, MODE_OLDFILE);
+    char *buf = NULL;
+    LONG len;
+    if (!fh) return NULL;
+    Seek(fh, 0, OFFSET_END);
+    len = Seek(fh, 0, OFFSET_BEGINNING);
+    if (len >= 0 && len < 64 * 1024 && (buf = AllocVec(len + 1, MEMF_ANY | MEMF_CLEAR)) && Read(fh, buf, len) != len) { FreeVec(buf); buf = NULL; }
+    Close(fh);
+    return buf;
+}
+
+static ULONG hash(ULONG h, const char *t)
+{
+    if (!t) return h * 33;
+    while (*t) h = h * 33 + (UBYTE)*t++;
+    return h;
+}
+
+/* The look's mode, as the dock reads it (its look_mode()): the first line of Look prefs, "<theme> light|dark|auto";
+ * auto is dark from seven in the evening to seven in the morning. */
+static int mode_of(const char *word)
+{
+    struct DateStamp ds;
+    int hour;
+    if (!strcmp(word, "dark")) return 1;
+    if (strcmp(word, "auto")) return 0;
+    DateStamp(&ds);
+    hour = (int)(ds.ds_Minute / 60);
+    return hour >= 19 || hour < 7;
+}
+
+/* What the look depends on, as one number: Look prefs, the dock's settings, the mode now (auto turns with the
+ * hour) and the screen's background. It changes when any of them does. */
+static ULONG look_signature(void)
+{
+    char *l = read_file(LOOK_ENV), *d = read_file(DOCK_ENV), name[64], mode[8];
+    ULONG h = hash(hash(5381, l), d);
+    if (l && sscanf(l, "%63s %7s", name, mode) == 2) h = h * 33 + (ULONG)mode_of(mode);
+    if (l) FreeVec(l);
+    if (d) FreeVec(d);
+    if (scr) {
+        struct DrawInfo *dri = GetScreenDrawInfo(scr);
+        if (dri) {
+            ULONG v[3] = { 0, 0, 0 };
+            GetRGB32(scr->ViewPort.ColorMap, dri->dri_Pens[BACKGROUNDPEN], 1, v);
+            h = h * 33 + (v[0] >> 24) * 65536 + (v[1] >> 24) * 256 + (v[2] >> 24);
+            FreeScreenDrawInfo(scr, dri);
+        }
     }
+    return h;
+}
+
+/* The dock's background (Solid, Glass or Clear), its opacity and its edge, from its settings file. */
+static void read_dock(void)
+{
+    char *t = read_file(DOCK_ENV), *line, *next, k[24], v[24];
+    dk_bg = BG_GLASS; dk_opacity = 35; dk_border = 1;
+    if (!t) return;
+    for (line = t; line && *line; line = next) {
+        if ((next = strchr(line, '\n'))) *next++ = 0;
+        if (line[0] == ';' || sscanf(line, "%23s %23s", k, v) != 2) continue;
+        if (!strcmp(k, "background")) dk_bg = !strcmp(v, "solid") ? BG_SOLID : !strcmp(v, "clear") ? BG_CLEAR : BG_GLASS;
+        else if (!strcmp(k, "opacity")) { LONG n; if (StrToLong((STRPTR)v, &n) > 0 && n >= 0 && n <= 100) dk_opacity = (int)n; }
+        else if (!strcmp(k, "borders")) dk_border = strcmp(v, "off") != 0;
+    }
+    FreeVec(t);
+}
+
+/* Look prefs: the theme, its mode, and the accent the user chose over it; then the theme file. */
+static void read_look(void)
+{
+    char *t = read_file(LOOK_ENV), name[64] = "", mode[8] = "", path[160], err[64], *text, *line, *next;
+    ogt_rgb accent;
+    int has_accent = 0, first = 1;
+    if (theme_ok) { ogt_theme_free(&theme); theme_ok = 0; }
+    look_mode = -1;
+    if (t) {
+        for (line = t; line && *line; line = next) {
+            if ((next = strchr(line, '\n'))) *next++ = 0;
+            if (first) {
+                if (sscanf(line, "%63s %7s", name, mode) == 2) look_mode = mode_of(mode);
+                first = 0;
+            } else if (!strncmp(line, "accent ", 7) && ogt_parse_colour(line + 7, &accent)) has_accent = 1;
+        }
+        FreeVec(t);
+    }
+    if (!name[0]) return;
+    snprintf(path, sizeof path, THEME_DIR "%s%s", name, strstr(name, ".theme") ? "" : ".theme");
+    if (!(text = read_file(path))) return;
+    theme_ok = ogt_theme_parse(&theme, text, err, sizeof err);
+    FreeVec(text);
+    if (theme_ok && has_accent) ogt_theme_set_accent(&theme, accent);
+}
+
+/* A colour of the theme in the mode, or the Open theme's own when the theme hasn't one (or is Classic). */
+static colour theme_colour(const char *key, ULONG light, ULONG dark)
+{
+    ogt_rgb c;
+    if (theme_ok && !theme.passthrough && ogt_theme_colour(&theme, look_mode == 1 ? OGT_DARK : OGT_LIGHT, key, &c)) {
+        colour r;
+        r.r = c.r; r.g = c.g; r.b = c.b;
+        return r;
+    }
+    return rgb(look_mode == 1 ? dark : light);
+}
+
+static colour pen_colour(int pen)
+{
+    ULONG v[3] = { 0, 0, 0 };
+    GetRGB32(scr->ViewPort.ColorMap, pen, 1, v);
+    return rgb((v[0] >> 24) << 16 | (v[1] >> 24) << 8 | (v[2] >> 24));
+}
+
+/* The dock's tint (its choose_colours()): dark for a dark look, light for a light one, from the screen's background
+ * where it fits; a neutral grey with no look. */
+static void choose_tint(void)
+{
+    struct DrawInfo *dri = GetScreenDrawInfo(scr);
+    bg_c = (colour){ 150, 150, 154 };
+    if (dri) { bg_c = pen_colour(dri->dri_Pens[BACKGROUNDPEN]); FreeScreenDrawInfo(scr, dri); }
+    if (look_mode == 1) tint = luma(bg_c) < 110 ? mix(bg_c, black, 64) : (colour){ 36, 36, 40 };
+    else if (look_mode == 0) tint = luma(bg_c) >= 150 ? mix(bg_c, white, 160) : (colour){ 236, 236, 240 };
+    else tint = (colour){ 150, 150, 154 };
+}
+
+static int opacity(void) { return dk_bg == BG_SOLID ? 100 : dk_bg == BG_CLEAR ? 0 : dk_opacity; }
+
+/* The text and bar colours: the theme's, each made to stand out from the panel as it shows (eff). */
+static void choose_colours(void)
+{
+    int dark = luma(eff) < 128;
+    c_text = theme_colour("text", 0x1c242d, 0xe4e9ee);
+    if (apart(c_text, eff) < 100) c_text = dark ? (colour){ 236, 236, 236 } : (colour){ 28, 28, 30 };
+    c_dim = theme_colour("muted", 0x4a5663, 0xa9b4bf);
+    if (apart(c_dim, eff) < 70) c_dim = mix(c_text, eff, 64);
+    /* a bar's track: a step from the panel, as the dock's group line is */
+    c_track = dark ? mix(eff, white, 56) : mix(eff, black, 48);
+    c_fill = theme_colour("accent", 0x2f6fb3, 0x2f6fb3);
+    c_fill_text = theme_colour("accent.text", 0xffffff, 0xffffff);
+    if (apart(c_fill_text, c_fill) < 90) c_fill_text = luma(c_fill) < 128 ? white : (colour){ 28, 28, 30 };
+    c_full = theme_colour("x-openmeters.warning", 0xd0452e, 0xe0583f);
+    c_full_text = luma(c_full) < 150 ? white : (colour){ 28, 28, 30 };
+}
+
+/* ---- drawing on a graphics card: everything mixed in ARGB, as the dock's shelf is ------------- */
+
+static int card;                   /* the screen is a graphics card's true colour */
+static int W, H;                   /* the panel's size */
+static ULONG *shelf_px, *work_px;  /* what is behind made into the panel, once per opening; the panel with the rows */
+static UBYTE inside[MAX_RADIUS * MAX_RADIUS], rimcov[MAX_RADIUS * MAX_RADIUS];
+static int radius;
+
+static int truecolour(void)
+{
+    struct BitMap *bm = scr->RastPort.BitMap;
+    if (!CyberGfxBase || !GetCyberMapAttr(bm, CYBRMATTR_ISCYBERGFX)) return 0;
+    return GetCyberMapAttr(bm, CYBRMATTR_DEPTH) > 8;
+}
+
+static ULONG argb(colour c) { return 0xff000000UL | (ULONG)c.r << 16 | (ULONG)c.g << 8 | (ULONG)c.b; }
+
+static ULONG blend(ULONG p, colour c, int a)       /* a of 255 parts c over p */
+{
+    int r = (p >> 16) & 255, g = (p >> 8) & 255, b = p & 255;
+    r += (c.r - r) * a / 255; g += (c.g - g) * a / 255; b += (c.b - b) * a / 255;
+    return 0xff000000UL | (ULONG)r << 16 | (ULONG)g << 8 | (ULONG)b;
+}
+
+/* The dock's corner (its make_corner()): how much of each pixel is inside the rounded edge, and on its rim. */
+static void make_corner(void)
+{
+    int R = radius, R8 = R * 8, in2 = R8 * R8, rim2 = (R8 - 8) * (R8 - 8);
+    for (int j = 0; j < R; j++)
+        for (int i = 0; i < R; i++) {
+            int a = 0, b = 0;
+            for (int v = 0; v < 4; v++)
+                for (int u = 0; u < 4; u++) {
+                    int dx = R8 - (8 * i + 2 * u + 1), dy = R8 - (8 * j + 2 * v + 1), d2 = dx * dx + dy * dy;
+                    if (d2 <= in2) { a++; if (d2 > rim2) b++; }
+                }
+            inside[j * R + i] = a * 255 / 16;
+            rimcov[j * R + i] = b * 255 / 16;
+        }
+}
+
+static void cover(int x, int y, int w, int h, int *in, int *on_rim)
+{
+    int i = x < radius ? x : x >= w - radius ? w - 1 - x : -1;
+    int j = y < radius ? y : y >= h - radius ? h - 1 - y : -1;
+    if (i >= 0 && j >= 0) { *in = inside[j * radius + i]; *on_rim = rimcov[j * radius + i]; return; }
+    *in = 255;
+    *on_rim = x == 0 || y == 0 || x == w - 1 || y == h - 1 ? 255 : 0;
+}
+
+/* The dock's frosted glass: what is behind, blurred (a box of 2 r + 1 pixels, across then down). */
+static void frost(ULONG *px, int w, int h, int r)
+{
+    int n = w > h ? w : h;
+    ULONG *line = AllocVec(n * 4, MEMF_ANY);
+    if (!line) return;
+    for (int pass = 0; pass < 2; pass++) {
+        int len = pass ? h : w, lines = pass ? w : h;
+        for (int k = 0; k < lines; k++) {
+            ULONG *first = pass ? px + k : px + k * w;
+            int step = pass ? w : 1, sr = 0, sg = 0, sb = 0, cnt = 2 * r + 1;
+            for (int t = 0; t < len; t++) line[t] = first[t * step];
+            for (int t = -r; t <= r; t++) {
+                ULONG p = line[t < 0 ? 0 : t >= len ? len - 1 : t];
+                sr += (p >> 16) & 255; sg += (p >> 8) & 255; sb += p & 255;
+            }
+            for (int t = 0; t < len; t++) {
+                ULONG in, out;
+                first[t * step] = 0xff000000UL | (ULONG)(sr / cnt) << 16 | (ULONG)(sg / cnt) << 8 | (ULONG)(sb / cnt);
+                in = line[t + r + 1 < len ? t + r + 1 : len - 1];
+                out = line[t - r < 0 ? 0 : t - r];
+                sr += (int)((in >> 16) & 255) - (int)((out >> 16) & 255);
+                sg += (int)((in >> 8) & 255) - (int)((out >> 8) & 255);
+                sb += (int)(in & 255) - (int)(out & 255);
+            }
+        }
+    }
+    FreeVec(line);
+}
+
+/* The panel from what is behind it (in shelf_px): as the dock's shelf (its make_shelf_card()). Sets eff. */
+static void make_shelf(void)
+{
+    int a = opacity() * 255 / 100, ra, n = W * H;
+    ULONG sr = 0, sg = 0, sb = 0;
+    colour mean;
+    for (int k = 0; k < n; k++) { ULONG p = shelf_px[k]; sr += (p >> 16) & 255; sg += (p >> 8) & 255; sb += p & 255; }
+    mean.r = sr / n; mean.g = sg / n; mean.b = sb / n;
+    eff = dk_bg == BG_CLEAR ? mean : mix(mean, tint, a * 256 / 255);
+    ra = luma(tint) < 128 ? 72 : 150;
+    if (dk_bg == BG_CLEAR) return;               /* Clear: what is behind, as it is, and nothing else */
+    if (dk_bg == BG_GLASS && a < 255) frost(shelf_px, W, H, 6);
+    for (int y = 0; y < H; y++)
+        for (int x = 0; x < W; x++) {
+            int in, on_rim;
+            ULONG *p = &shelf_px[y * W + x];
+            cover(x, y, W, H, &in, &on_rim);
+            if (!in) continue;
+            if (a) *p = blend(*p, tint, a * in / 255);
+            if (dk_bg == BG_GLASS && y < H / 2) *p = blend(*p, white, (H / 2 - y) * 40 / (H / 2) * in / 255);
+            if (dk_border && on_rim) *p = blend(*p, white, ra * on_rim / 255);
+        }
+}
+
+/* How much of pixel (i, j), counted from a corner, is inside a circle of radius r there: 0 to 16. */
+static int corner_cov(int i, int j, int r)
+{
+    int n = 0, R8 = r * 8;
+    for (int v = 0; v < 4; v++)
+        for (int u = 0; u < 4; u++) {
+            int dx = R8 - (8 * i + 2 * u + 1), dy = R8 - (8 * j + 2 * v + 1);
+            if (dx * dx + dy * dy <= R8 * R8) n++;
+        }
+    return n;
+}
+
+/* A box with round ends, smooth, a of 255 parts c over what is there. */
+static void round_box(ULONG *px, int x, int y, int w, int h, int r, colour c, int a)
+{
+    if (w <= 0 || h <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++) {
+            int X = x + i, Y = y + j, ci = i < r ? i : i >= w - r ? w - 1 - i : -1, cj = j < r ? j : j >= h - r ? h - 1 - j : -1, cv = 16;
+            if (X < 0 || Y < 0 || X >= W || Y >= H) continue;
+            if (ci >= 0 && cj >= 0) cv = corner_cov(ci, cj, r);
+            if (cv) px[Y * W + X] = blend(px[Y * W + X], c, a * cv / 16);
+        }
+}
+
+/* Text in ARGB: drawn in one plane of chip memory, then each set pixel coloured, c left of split and c2 from it. */
+static struct BitMap tbm;
+static UBYTE *tplane;
+static struct RastPort trp;
+static int tbm_w;
+
+static void text_free(void) { if (tplane) { WaitBlit(); FreeVec(tplane); tplane = NULL; } }
+
+static int text_open(int w)
+{
+    text_free();
+    tbm_w = (w + 15) & ~15;
+    InitBitMap(&tbm, 1, tbm_w, font->tf_YSize);
+    if (!(tplane = AllocVec(RASSIZE(tbm_w, font->tf_YSize), MEMF_CHIP | MEMF_CLEAR))) return 0;
+    tbm.Planes[0] = tplane;
+    InitRastPort(&trp);
+    trp.BitMap = &tbm;
+    SetFont(&trp, font);
+    SetAPen(&trp, 1);
+    SetDrMd(&trp, JAM1);
+    return 1;
+}
+
+static void text_px(int x, int y, const char *s, colour c, int split, colour c2)
+{
+    int n = strlen(s), fh = font->tf_YSize, bpr = tbm.BytesPerRow, tw;
+    if (!tplane || !n) return;
+    WaitBlit();
+    memset(tplane, 0, bpr * fh);
+    Move(&trp, 0, font->tf_Baseline);
+    Text(&trp, (STRPTR)s, n);
+    WaitBlit();
+    tw = TextLength(&trp, (STRPTR)s, n) + 8;
+    if (tw > tbm_w) tw = tbm_w;
+    for (int r = 0; r < fh; r++) {
+        const UBYTE *b = tplane + r * bpr;
+        int Y = y + r;
+        if (Y < 0 || Y >= H) continue;
+        for (int i = 0; i < tw; i++) {
+            int X = x + i;
+            if (!(b[i >> 3] & (0x80 >> (i & 7))) || X < 0 || X >= W) continue;
+            work_px[Y * W + X] = argb(X < split ? c2 : c);
+        }
+    }
+}
+
+/* ---- drawing on a palette screen: the nearest pens, solid, as the dock's are ------------------ */
+
+enum { P_TINT, P_RIM, P_TRACK, P_FILL, P_FULL, P_TEXT, P_DIM, P_FILLTEXT, P_COUNT };
+static LONG pens[P_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1 };
+static struct BitMap *behind_bm;   /* what is behind the panel, on a palette screen */
+
+static LONG best_pen(colour c)
+{
+    return ObtainBestPen(scr->ViewPort.ColorMap, (ULONG)c.r * 0x01010101UL, (ULONG)c.g * 0x01010101UL, (ULONG)c.b * 0x01010101UL,
+                         OBP_Precision, PRECISION_IMAGE, TAG_DONE);
 }
 
 static void free_pens(void)
 {
-    int i;
-    for (i = 0; i < C_COUNT; i++) if (pens[i] >= 0 && scr) ReleasePen(scr->ViewPort.ColorMap, pens[i]);
+    for (int i = 0; i < P_COUNT; i++) {
+        if (pens[i] >= 0 && scr) ReleasePen(scr->ViewPort.ColorMap, pens[i]);
+        pens[i] = -1;
+    }
 }
+
+static void get_pens(void)
+{
+    colour c[P_COUNT];
+    free_pens();
+    c[P_TINT] = tint; c[P_RIM] = mix(tint, white, luma(tint) < 128 ? 72 : 150); c[P_TRACK] = c_track; c[P_FILL] = c_fill;
+    c[P_FULL] = c_full; c[P_TEXT] = c_text; c[P_DIM] = c_dim; c[P_FILLTEXT] = c_text;
+    for (int i = 0; i < P_COUNT; i++) pens[i] = best_pen(c[i]);
+}
+
+static LONG pen(int i) { return pens[i] >= 0 ? pens[i] : i == P_TINT || i == P_TRACK ? 0 : 1; }
+
+/* ---- measuring and drawing ------------------------------------------------------------------- */
 
 static WORD text_w(const char *s)
 {
@@ -372,64 +758,139 @@ static void measure(WORD *w, WORD *h)
     *h = PAD + (opt.nodate ? 0 : row_h + 2) + nrows * row_h + PAD - 2;
 }
 
-static void text_at(struct RastPort *rp, LONG x, LONG y, const char *s, LONG pen)
+static void text_at(struct RastPort *rp, LONG x, LONG y, const char *s, LONG p)
 {
-    SetAPen(rp, pen);
+    SetAPen(rp, p);
     SetDrMd(rp, JAM1);
     Move(rp, x, y + font->tf_Baseline);
     Text(rp, (STRPTR)s, strlen(s));
 }
 
-static void draw(void)
+/* The rows over the panel, into work_px (a card) or straight into the window (pens). */
+static void compose(void)
 {
+    WORD y = PAD, bx = PAD + label_w + GAP;
+    int i, bh = row_h - 4, br = bh / 2 > 6 ? 6 : bh / 2;
     struct RastPort *rp = win->RPort;
-    WORD w = win->Width, h = win->Height, y = PAD, bx = PAD + label_w + GAP;
-    int i;
-    SetFont(rp, font);
-    SetAPen(rp, pens[C_PANEL]);
-    RectFill(rp, 1, 1, w - 2, h - 2);
-    SetAPen(rp, pens[C_EDGE]);
-    Move(rp, 0, 0); Draw(rp, w - 1, 0); Draw(rp, w - 1, h - 1); Draw(rp, 0, h - 1); Draw(rp, 0, 0);
+    if (card) memcpy(work_px, shelf_px, W * H * 4);
+    else {
+        SetFont(rp, font);
+        if (behind_bm) BltBitMapRastPort(behind_bm, 0, 0, rp, 0, 0, W, H, 0xc0);
+        else { SetAPen(rp, pen(P_TINT)); RectFill(rp, 0, 0, W - 1, H - 1); }
+        if (dk_bg != BG_CLEAR) {
+            SetAPen(rp, pen(P_TINT));
+            for (int yy = 0; yy < H; yy++) {
+                int j = yy < radius ? yy : yy >= H - radius ? H - 1 - yy : -1, l = 0;
+                if (j >= 0) while (l < radius && inside[j * radius + l] < 128) l++;
+                if (l <= W - 1 - l) RectFill(rp, l, yy, W - 1 - l, yy);
+            }
+        }
+    }
     if (!opt.nodate) {
-        text_at(rp, (w - text_w(date_line)) / 2, y + 2, date_line, pens[C_DIM]);
+        WORD dx = (W - text_w(date_line)) / 2;
+        if (card) text_px(dx, y + 2, date_line, c_dim, 0, c_dim);
+        else text_at(rp, dx, y + 2, date_line, pen(P_DIM));
         y += row_h + 2;
     }
     for (i = 0; i < nrows; i++, y += row_h) {
         row *r = &rows[i];
-        WORD by = y + 1, bh = row_h - 4, fw;
-        text_at(rp, bx - GAP - text_w(r->label), y + 2, r->label, pens[C_TEXT]);
-        SetAPen(rp, pens[C_TRACK_EDGE]);
-        RectFill(rp, bx, by, bx + opt.barwidth - 1, by + bh - 1);
-        SetAPen(rp, pens[C_TRACK]);
-        RectFill(rp, bx + 1, by + 1, bx + opt.barwidth - 2, by + bh - 2);
+        WORD by = y + 1, fw = 0, vx = bx + opt.barwidth - 6 - text_w(r->value);
+        int full = r->fill != (ULONG)-1 && r->fill >= 900;
         if (r->fill != (ULONG)-1 && r->fill > 0) {
-            fw = (WORD)((opt.barwidth - 2) * r->fill / 1000);
-            if (fw < 2) fw = 2;
-            SetAPen(rp, pens[r->fill >= 900 ? C_FULL : r->kind]);
-            RectFill(rp, bx + 1, by + 1, bx + fw, by + bh - 2);
+            fw = (WORD)(opt.barwidth * r->fill / 1000);
+            if (fw < 2 * br) fw = 2 * br;
         }
-        text_at(rp, bx + opt.barwidth - 6 - text_w(r->value), y + 2, r->value, pens[C_TEXT]);
+        if (card) {
+            text_px(bx - GAP - text_w(r->label), y + 2, r->label, c_text, 0, c_text);
+            round_box(work_px, bx, by, opt.barwidth, bh, br, c_track, 255);
+            if (fw) round_box(work_px, bx, by, fw, bh, br, full ? c_full : c_fill, 255);
+            text_px(vx, y + 2, r->value, c_text, bx + fw - (fw ? 1 : 0), full ? c_full_text : c_fill_text);
+        } else {
+            text_at(rp, bx - GAP - text_w(r->label), y + 2, r->label, pen(P_TEXT));
+            SetAPen(rp, pen(P_TRACK));
+            RectFill(rp, bx, by, bx + opt.barwidth - 1, by + bh - 1);
+            if (fw) { SetAPen(rp, pen(full ? P_FULL : P_FILL)); RectFill(rp, bx, by, bx + fw - 1, by + bh - 1); }
+            text_at(rp, vx, y + 2, r->value, pen(P_TEXT));
+        }
     }
 }
 
-/* The window's size for the rows; moved back onto the screen if it would go off it. */
-static void fit(void)
+static void show(void)
 {
-    WORD w, h, x, y;
-    measure(&w, &h);
-    if (w == win->Width && h == win->Height) return;
-    x = win->LeftEdge;
-    y = win->TopEdge;
-    if (x + w > scr->Width) x = scr->Width - w;
-    if (y + h > scr->Height) y = scr->Height - h;
-    if (x < 0) x = 0;
-    if (y < 0) y = 0;
-    ChangeWindowBox(win, x, y, w, h);
-    drag.Width = w;
-    drag.Height = h;
+    if (!win) return;
+    if (card) WritePixelArray(work_px, 0, 0, W * 4, win->RPort, 0, 0, W, H, RECTFMT_ARGB);
+    else compose();
 }
 
-/* ---- the program ---------------------------------------------------------------------------- */
+static void draw(void)
+{
+    if (!win) return;
+    if (card) compose();
+    show();
+}
+
+/* ---- seeing through, kept up to date (as the dock does) --------------------------------------- */
+
+static int px0, py0;               /* where the panel is on the screen */
+static ULONG *seen_line;           /* the screen beside the panel when what is behind it was copied */
+static int line_x, line_y, line_n, line_across;
+static int copy_dirty;             /* a window was over the place when it was copied: copy again once it has gone */
+
+/* True when a window other than a backdrop one (or ours) is over the box. */
+static int covered(int x, int y, int w, int h)
+{
+    int over = 0;
+    ULONG lock = LockIBase(0);
+    for (struct Window *v = scr->FirstWindow; v && !over; v = v->NextWindow) {
+        if (v == win || (v->Flags & WFLG_BACKDROP)) continue;
+        over = !(v->LeftEdge >= x + w || v->LeftEdge + v->Width <= x || v->TopEdge >= y + h || v->TopEdge + v->Height <= y);
+    }
+    UnlockIBase(lock);
+    return over;
+}
+
+/* A line of the desktop beside the panel: above it, or below, or to its side when it is at the screen's edges. */
+static void choose_line(void)
+{
+    line_n = 0;
+    if (py0 - 1 > scr->BarHeight) { line_x = px0; line_y = py0 - 1; line_n = W; line_across = 1; }
+    else if (py0 + H < scr->Height) { line_x = px0; line_y = py0 + H; line_n = W; line_across = 1; }
+    else if (px0 > 0) { line_x = px0 - 1; line_y = py0; line_n = H; line_across = 0; }
+    else if (px0 + W < scr->Width) { line_x = px0 + W; line_y = py0; line_n = H; line_across = 0; }
+    if (line_across && line_x + line_n > scr->Width) line_n = scr->Width - line_x;
+    if (!line_across && line_y + line_n > scr->Height) line_n = scr->Height - line_y;
+}
+
+static void read_line(ULONG *to)
+{
+    ReadPixelArray(to, 0, 0, line_across ? line_n * 4 : 4, &scr->RastPort, line_x, line_y,
+                   line_across ? line_n : 1, line_across ? 1 : line_n, RECTFMT_ARGB);
+}
+
+/* True when the desktop beside the panel is no longer what it was when the copy was made: the backdrop was
+ * drawn or changed since (a theme, a picture decoded), so what shows through is old. */
+static int behind_stale(void)
+{
+    ULONG *now;
+    int diff = 0, count = 0;
+    if (!card || !seen_line || line_n <= 0) return 0;
+    if (covered(line_x, line_y, line_across ? line_n : 1, line_across ? 1 : line_n)) return 0;
+    if (!(now = AllocVec(line_n * 4, MEMF_ANY))) return 0;
+    read_line(now);
+    for (int i = 0; i < line_n; i += 4) {
+        ULONG a = now[i], b = seen_line[i];
+        int dr = (int)((a >> 16) & 255) - (int)((b >> 16) & 255), dg = (int)((a >> 8) & 255) - (int)((b >> 8) & 255),
+            db = (int)(a & 255) - (int)(b & 255);
+        diff += (dr < 0 ? -dr : dr) + (dg < 0 ? -dg : dg) + (db < 0 ? -db : db);
+        count++;
+    }
+    FreeVec(now);
+    return count && diff / count / 3 > 14;
+}
+
+/* ---- opening and closing ---------------------------------------------------------------------- */
+
+static int placed;                 /* a place of its own (LEFT, TOP, or dragged): not the corner's */
 
 static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"OpenMeters", NULL, 0, 0, NULL },
@@ -439,20 +900,34 @@ static struct NewMenu newmenus[] = {
     { NM_END, NULL, NULL, 0, 0, NULL }
 };
 
-static int run(void)
+static void close_panel(void)
 {
-    struct MsgPort *tport = NULL;
-    struct timerequest *tr = NULL;
-    int timer = 0, quit = 0;
+    if (win) { ClearMenuStrip(win); CloseWindow(win); win = NULL; }
+    if (menus) { FreeMenus(menus); menus = NULL; }
+    if (vi) { FreeVisualInfo(vi); vi = NULL; }
+    text_free();
+    if (shelf_px) { FreeVec(shelf_px); shelf_px = NULL; }
+    if (work_px) { FreeVec(work_px); work_px = NULL; }
+    if (seen_line) { FreeVec(seen_line); seen_line = NULL; }
+    if (behind_bm) { WaitBlit(); FreeBitMap(behind_bm); behind_bm = NULL; }
+    if (scr) free_pens();
+    if (font) { CloseFont(font); font = NULL; }
+    if (scr) { UnlockPubScreen(NULL, scr); scr = NULL; }
+}
+
+/* The panel at its place, made from what is behind it now, with the look as it is now. */
+static int open_panel(void)
+{
     WORD w, h, x, y;
-    APTR vi = NULL;
-    if (!(scr = LockPubScreen((STRPTR)"Workbench"))) return RETURN_FAIL;
-    font = OpenFont(scr->Font);
-    if (!font) { UnlockPubScreen(NULL, scr); return RETURN_FAIL; }
-    get_pens();
+    if (!(scr = LockPubScreen((STRPTR)"Workbench"))) return 0;
+    if (!(font = OpenFont(scr->Font))) { close_panel(); return 0; }
+    read_look();
+    read_dock();
+    look_sig = look_signature();
+    choose_tint();
     read_all();
     measure(&w, &h);
-    if (opt.left < 0 || opt.top < 0) {
+    if (!placed) {
         x = (opt.corner & 1) ? scr->Width - w - 20 : 20;
         y = (opt.corner & 2) ? scr->Height - h - 20 : scr->BarHeight + 20;
     } else {
@@ -463,6 +938,35 @@ static int run(void)
     if (y + h > scr->Height) y = scr->Height - h;
     if (x < 0) x = 0;
     if (y < scr->BarHeight + 1) y = scr->BarHeight + 1;
+    W = w; H = h; px0 = x; py0 = y;
+    radius = h / 4 < MAX_RADIUS ? h / 4 : MAX_RADIUS;
+    if (radius < 2) radius = 2;
+    make_corner();
+    /* what is behind the panel, before the window is there (a window over its place is copied too: then the
+     * copy is made again once it has gone) */
+    copy_dirty = covered(x, y, w, h);
+    card = truecolour();
+    if (card) {
+        shelf_px = AllocVec(W * H * 4, MEMF_ANY);
+        work_px = AllocVec(W * H * 4, MEMF_ANY);
+        if (!shelf_px || !work_px || !text_open(W)) {
+            card = 0;
+            if (shelf_px) { FreeVec(shelf_px); shelf_px = NULL; }
+            if (work_px) { FreeVec(work_px); work_px = NULL; }
+        }
+    }
+    if (card) {
+        ReadPixelArray(shelf_px, 0, 0, W * 4, &scr->RastPort, x, y, W, H, RECTFMT_ARGB);
+        choose_line();
+        if (line_n > 0 && (seen_line = AllocVec(line_n * 4, MEMF_ANY))) read_line(seen_line);
+        make_shelf();
+    } else {
+        if ((behind_bm = AllocBitMap(W, H, GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH), 0, scr->RastPort.BitMap)))
+            BltBitMap(scr->RastPort.BitMap, x, y, behind_bm, 0, 0, W, H, 0xc0, 0xff, NULL);
+        eff = dk_bg == BG_CLEAR ? bg_c : tint;
+    }
+    choose_colours();
+    if (!card) get_pens();
     /* any part of it drags it */
     drag.LeftEdge = 0;
     drag.TopEdge = 0;
@@ -475,59 +979,106 @@ static int run(void)
                          WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_Activate, FALSE, WA_RMBTrap, FALSE,
                          WA_NewLookMenus, TRUE, WA_Gadgets, (ULONG)&drag, WA_Title, (ULONG)"OpenMeters",
                          WA_IDCMP, IDCMP_REFRESHWINDOW | IDCMP_MENUPICK | IDCMP_CHANGEWINDOW, TAG_DONE);
-    if (!win) goto out;
-    WindowToBack(win);
+    if (!win) { close_panel(); return 0; }
+    WindowToBack(win);                         /* one above the backdrop, as the dock: every other window goes over it */
     if ((vi = GetVisualInfoA(scr, NULL)) && (menus = CreateMenusA(newmenus, NULL)) && LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
         SetMenuStrip(win, menus);
     draw();
+    return 1;
+}
+
+/* Settings, the look, the size or the place changed: the panel opens again, so what is behind it is copied afresh
+ * (as the dock's relayout()). */
+static int relayout(void)
+{
+    close_panel();
+    Delay(8);                                  /* OpenBench redraws what the panel covered */
+    return open_panel();
+}
+
+/* ---- the program ---------------------------------------------------------------------------- */
+
+static int run(void)
+{
+    struct MsgPort *tport = NULL;
+    struct timerequest *tr = NULL;
+    int timer = 0, quit = 0, ticks = 0, wb_down = 0, stale_wait = 0;
+    placed = opt.left >= 0 && opt.top >= 0;
+    wbc_start();
+    if (!open_panel()) { wbc_stop(); return RETURN_FAIL; }
     if ((tport = CreateMsgPort()) && (tr = (struct timerequest *)CreateIORequest(tport, sizeof *tr)) &&
         !OpenDevice((STRPTR)TIMERNAME, UNIT_VBLANK, (struct IORequest *)tr, 0)) {
         timer = 1;
         tr->tr_node.io_Command = TR_ADDREQUEST;
-        tr->tr_time.tv_secs = opt.refresh > 0 ? opt.refresh : 2;
+        tr->tr_time.tv_secs = 1;
         tr->tr_time.tv_micro = 0;
         SendIO((struct IORequest *)tr);
     }
-    while (!quit) {
-        ULONG got = Wait((1UL << win->UserPort->mp_SigBit) | (timer ? 1UL << tport->mp_SigBit : 0) | SIGBREAKF_CTRL_C);
+    while (!quit && (win || wb_down)) {
+        ULONG got = Wait((win ? 1UL << win->UserPort->mp_SigBit : 0) | (timer ? 1UL << tport->mp_SigBit : 0) |
+                         SIGBREAKF_CTRL_C | SIGBREAKF_CTRL_F | wbc_sigmask());
         struct IntuiMessage *im;
+        int again = 0, redraw = 0;
         if (got & SIGBREAKF_CTRL_C) quit = 1;
+        /* Workbench is being reset (Font prefs' Use, a screen mode): no window, no lock on its screen until it is back */
+        switch (wbc_take()) {
+        case WBC_CLOSE: close_panel(); wb_down = 1; wbc_closed(); break;
+        case WBC_OPEN: wb_down = 2; break;
+        }
+        if (wb_down == 2 && open_panel()) wb_down = 0;
+        if (got & SIGBREAKF_CTRL_F) again = 1;  /* told the look changed */
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
-            read_all();
-            fit();
-            draw();
-            tr->tr_time.tv_secs = opt.refresh > 0 ? opt.refresh : 2;
+            if (win && !wb_down) {
+                ticks++;
+                if (stale_wait > 0) stale_wait--;
+                /* the look, its mode, the theme or the dock's settings changed: drawn again in the new look */
+                if (look_signature() != look_sig) again = 1;
+                /* what is behind it changed: a window over its place has gone, or the desktop was drawn again */
+                else if (copy_dirty && !covered(px0, py0, W, H)) again = 1;
+                else if (stale_wait <= 0 && behind_stale()) { again = 1; stale_wait = 3; }
+                if (!again && ticks >= (opt.refresh > 0 ? opt.refresh : 2)) {
+                    WORD w, h;
+                    ticks = 0;
+                    read_all();
+                    measure(&w, &h);
+                    if (w != W || h != H) again = 1; else redraw = 1;
+                }
+            }
+            tr->tr_time.tv_secs = 1;
             tr->tr_time.tv_micro = 0;
             SendIO((struct IORequest *)tr);
         }
-        while ((im = (struct IntuiMessage *)GetMsg(win->UserPort))) {
+        while (win && (im = (struct IntuiMessage *)GetMsg(win->UserPort))) {
             ULONG cl = im->Class;
             UWORD code = im->Code;
             ReplyMsg((struct Message *)im);
-            if (cl == IDCMP_REFRESHWINDOW) { BeginRefresh(win); draw(); EndRefresh(win, TRUE); }
-            else if (cl == IDCMP_CHANGEWINDOW) place_save();
-            else if (cl == IDCMP_MENUPICK) {
+            if (cl == IDCMP_REFRESHWINDOW) { BeginRefresh(win); show(); EndRefresh(win, TRUE); }
+            else if (cl == IDCMP_CHANGEWINDOW && (win->LeftEdge != px0 || win->TopEdge != py0)) {
+                /* dragged: kept there, and what is behind it there copied */
+                opt.left = win->LeftEdge; opt.top = win->TopEdge; placed = 1;
+                place_save();
+                again = 1;
+            } else if (cl == IDCMP_MENUPICK) {
                 while (code != MENUNULL) {
                     struct MenuItem *it = ItemAddress(menus, code);
                     if (!it) break;
-                    if (GTMENUITEM_USERDATA(it) == (APTR)1) { read_all(); fit(); draw(); }
+                    if (GTMENUITEM_USERDATA(it) == (APTR)1) again = 1;
                     else if (GTMENUITEM_USERDATA(it) == (APTR)2) quit = 1;
                     code = it->NextSelect;
                 }
             }
         }
+        if (quit || wb_down) continue;
+        if (again) { ticks = 0; if (!relayout()) wb_down = 2; }   /* not opened: tried again each second */
+        else if (redraw) draw();
     }
-out:
     if (timer) { if (!CheckIO((struct IORequest *)tr)) AbortIO((struct IORequest *)tr); WaitIO((struct IORequest *)tr); CloseDevice((struct IORequest *)tr); }
     if (tr) DeleteIORequest((struct IORequest *)tr);
     if (tport) DeleteMsgPort(tport);
-    if (win) { ClearMenuStrip(win); CloseWindow(win); win = NULL; }
-    if (menus) { FreeMenus(menus); menus = NULL; }
-    if (vi) FreeVisualInfo(vi);
-    free_pens();
-    CloseFont(font);
-    UnlockPubScreen(NULL, scr);
+    close_panel();
+    wbc_stop();
+    if (theme_ok) { ogt_theme_free(&theme); theme_ok = 0; }
     return RETURN_OK;
 }
 
@@ -542,6 +1093,7 @@ int main(int argc, char **argv)
     UtilityBase = OpenLibrary((STRPTR)"utility.library", 39);
     GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39);
     IconBase = OpenLibrary((STRPTR)"icon.library", 39);
+    CyberGfxBase = OpenLibrary((STRPTR)"cybergraphics.library", 41);   /* the panel mixed with the desktop on a card */
     if (!IntuitionBase || !GfxBase || !UtilityBase || !GadToolsBase) goto done;
     place_read();
     if (wbs) tooltypes(wbs);
@@ -571,6 +1123,7 @@ int main(int argc, char **argv)
     rc = run();
 done:
     if (rda) FreeArgs(rda);
+    if (CyberGfxBase) CloseLibrary(CyberGfxBase);
     if (IconBase) CloseLibrary(IconBase);
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (UtilityBase) CloseLibrary(UtilityBase);
