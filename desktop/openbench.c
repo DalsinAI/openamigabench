@@ -20,9 +20,12 @@
  *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
  *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter);
  *   - the backdrop's pixels (0.1.15: the picture cut and scaled to cover the screen, then laid over the
- *     gradient) worked out in bands of rows shared with the cores board's cores, with omc_bands() from
- *     openmulticore (include/openmulticore/bands.h, copied in; the Team, 11 October 2026). With no
- *     openmulticore.library or no board, or after an error on a core, every row is done here: the same pixels.
+ *     gradient) in one pass, backdrop_rows(), which can be shared in bands of rows with the cores board's
+ *     cores through omc_bands() from openmulticore (include/openmulticore/bands.h, copied in; the Team,
+ *     11 October 2026). 0.1.16: only when ENV:OpenMulticore/Bands exists, since on Instance-32 today the
+ *     board's cores make it slower, not faster (openamigamulticore README.md, "What uses the cores"). With
+ *     no openmulticore.library or no board, or after an error on a core, every row is done here: the same
+ *     pixels.
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -92,7 +95,7 @@
 #include "ogt_font.h"
 #include <openmulticore/bands.h>
 
-#define OPENBENCH_VERSION "0.1.15"
+#define OPENBENCH_VERSION "0.1.16"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -469,8 +472,9 @@ static void backdrop_rows(APTR data, ULONG y0, ULONG y1)
     }
 }
 
-/* The picture made screen-sized and opaque over the gradient, in bands on the cores when there are some
- * (0.1.15; 0.1.14's cover() and over_gradient() did the same, one after the other, here). The picture
+/* The picture made screen-sized and opaque over the gradient (0.1.15; 0.1.14's cover() and over_gradient()
+ * did the same, one after the other). In bands on the cores only when ENV:OpenMulticore/Bands exists (0.1.16):
+ * on Instance-32's board today, eight bands cost more to send and collect than they save. The picture
  * itself when it is the screen's size, else a new buffer; NULL when there is no memory. */
 static ULONG *cover_over(ULONG *src, LONG sw, LONG sh, int alpha, const ULONG *grad, LONG W, LONG H)
 {
@@ -486,7 +490,8 @@ static ULONG *cover_over(ULONG *src, LONG sw, LONG sh, int alpha, const ULONG *g
     if (sw == W && sh == H) b.dst = src;
     else if (!(b.dst = bd_alloc((ULONG)W * H * 4))) return NULL;
     if (b.dst == src && b.opaque) backdrop_rows(&b, 0, (ULONG)H);   /* only the alpha to set: too little to share */
-    else omc_bands(NULL, backdrop_rows, &b, (ULONG)H, b.dst, (ULONG)W * 4, 0, NULL);
+    else omc_bands(NULL, backdrop_rows, &b, (ULONG)H, b.dst, (ULONG)W * 4,
+                   Lock_exists("ENV:OpenMulticore/Bands") ? 0 : OMCBF_LOCAL, NULL);
     return b.dst;
 }
 
