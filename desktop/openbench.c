@@ -63,19 +63,19 @@
 #include <proto/icon.h>
 #include <proto/wb.h>
 #include <proto/datatypes.h>
+#include <clib/alib_protos.h>
 #include <proto/expansion.h>
 #include <proto/input.h>
 #include <inline/macros.h>
 
 #include "obmsg.h"
-#include "ob_png.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.5"
+#define OPENBENCH_VERSION "0.1.6"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -266,15 +266,14 @@ static struct Hook backfill_hook;
 
 struct backfill_msg { struct Layer *layer; struct Rectangle bounds; LONG ox, oy; };
 
-/* The picture, as IPrefs gives Workbench its backdrop (0.1.3): picture.datatype renders it into a bitmap
- * in the Workbench screen's own format (PDTA_Remap, DTM_PROCLAYOUT), kept with its object, and blitted
- * centred at its own size, the theme's gradient round it. 0.1 to 0.1.2 read the picture's pixels as
- * ARGB instead (PMODE_V43, PDTM_READPIXELARRAY) and scaled them; on Instance-32 that path wrote to a
- * wild address within seconds, twice, while IPrefs' route has drawn the same picture every boot. The
- * crashing loop was found in Hyperion's picture.datatype (its RGB to ARGB conversion for READPIXELARRAY,
- * SYS:Classes/DataTypes/picture.datatype at 44402): OpenBench never asks it for a pixel array. 0.1.4:
- * PMODE_V43 with the remap, as IPrefs asks, so a true-colour screen gets the picture in true colour
- * (0.1.3 got it dithered to pens). */
+/* The backdrop picture (0.1.6): read through datatypes, the Amiga's way, as ARGB pixels (PMODE_V43,
+ * PDTM_READPIXELARRAY sent with DoMethodA) and cut and scaled to cover the screen; a PNG comes through
+ * openpng.datatype (openamigaimage), our own decoder. 0.1 and 0.1.1 sent that read with DoDTMethodA, which
+ * puts a GadgetInfo (NULL, with no window) where the pixel array's address goes: picture.datatype then
+ * wrote the picture from address 0 up through Chip RAM, which was the boot crash on Instance-32 (found on
+ * 11 October 2026; picture.datatype itself is fine). 0.1.3 to 0.1.5 went round it (IPrefs' render, then
+ * ob_png, a reader of OpenBench's own). The IPrefs render (PDTA_Remap, DTM_PROCLAYOUT, a bitmap in the
+ * screen's format, blitted centred) stays as the fallback when a datatype can't give its pixels. */
 static Object *volatile pic_obj;
 static struct BitMap *volatile pic_bm;
 static volatile LONG pic_w, pic_h;
@@ -414,6 +413,57 @@ static ULONG *cover(ULONG *src, LONG sw, LONG sh, LONG W, LONG H)
 
 static ULONG *volatile picture_ready;
 
+/* The picture's pixels as ARGB through its datatype, opaque over the gradient where it has alpha. */
+static ULONG *picture_pixels(const char *path, LONG *pw, LONG *ph)
+{
+    struct BitMapHeader *bmh = NULL;
+    struct pdtBlitPixelArray m;
+    ULONG *px = NULL, n, i;
+    Object *o;
+    *pw = *ph = 0;
+    if (!DataTypesBase || !(o = NewDTObject((APTR)path, DTA_GroupID, GID_PICTURE, PDTA_Remap, FALSE,
+                                            PDTA_DestMode, PMODE_V43, TAG_DONE)))
+        return NULL;
+    if (GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE) && bmh && bmh->bmh_Width > 0 && bmh->bmh_Height > 0
+        && (px = AllocVec((ULONG)bmh->bmh_Width * bmh->bmh_Height * 4, MEMF_FAST))) {
+        m.MethodID = PDTM_READPIXELARRAY;
+        m.pbpa_PixelData = px;
+        m.pbpa_PixelFormat = PBPAFMT_ARGB;
+        m.pbpa_PixelArrayMod = (ULONG)bmh->bmh_Width * 4;
+        m.pbpa_Left = 0;
+        m.pbpa_Top = 0;
+        m.pbpa_Width = bmh->bmh_Width;
+        m.pbpa_Height = bmh->bmh_Height;
+        if (DoMethodA(o, (Msg)&m)) {             /* DoMethodA: see above */
+            *pw = bmh->bmh_Width;
+            *ph = bmh->bmh_Height;
+            n = (ULONG)*pw * *ph;
+            if (bmh->bmh_Masking != mskHasAlpha)
+                for (i = 0; i < n; i++) px[i] |= 0xff000000UL;   /* 24-bit pictures come with alpha 0 */
+        } else {
+            FreeVec(px);
+            px = NULL;
+        }
+    }
+    DisposeDTObject(o);
+    return px;
+}
+
+/* A picture with alpha over the gradient (both screen-sized). */
+static void over_gradient(ULONG *pic, const ULONG *grad, ULONG n)
+{
+    ULONG i;
+    for (i = 0; i < n; i++) {
+        ULONG p = pic[i], a = p >> 24, q, r, g, b;
+        if (a == 255) continue;
+        q = grad ? grad[i] : 0;
+        r = (((p >> 16) & 255) * a + ((q >> 16) & 255) * (255 - a) + 127) / 255;
+        g = (((p >> 8) & 255) * a + ((q >> 8) & 255) * (255 - a) + 127) / 255;
+        b = ((p & 255) * a + (q & 255) * (255 - a) + 127) / 255;
+        pic[i] = 0xff000000UL | (r << 16) | (g << 8) | b;
+    }
+}
+
 static void picture_entry(void)
 {
     char twin[300];
@@ -422,21 +472,22 @@ static void picture_entry(void)
     Object *o = NULL;
     struct BitMap *bm = NULL;
     struct BitMapHeader *bmh = NULL;
-    /* 0.1.5: a PNG through OpenBench's own reader (ob_png.c), the screen-sized one when there is one */
-    if (screen_twin(picture_path, bd_w, bd_h, twin, sizeof twin)) px = ob_png_load(twin, &pw, &ph);
-    if (!px) px = ob_png_load(picture_path, &pw, &ph);
+    /* the screen-sized twin when there is one, else the picture; its pixels through datatypes */
+    if (screen_twin(picture_path, bd_w, bd_h, twin, sizeof twin)) px = picture_pixels(twin, &pw, &ph);
+    if (!px) px = picture_pixels(picture_path, &pw, &ph);
     if (px) {
         done = cover(px, pw, ph, bd_w, bd_h);
         if (done != px) FreeVec(px);
+        if (done) over_gradient(done, backdrop, (ULONG)bd_w * bd_h);
     } else if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
                                                  PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43, OBP_Precision, PRECISION_IMAGE,
                                                  TAG_DONE))) {
-        /* anything else (IFF, JPEG): as IPrefs renders it, centred */
+        /* no pixels to be had: as IPrefs renders it, centred */
         struct gpLayout gl;
         gl.MethodID = DTM_PROCLAYOUT;
         gl.gpl_GInfo = NULL;
         gl.gpl_Initial = TRUE;
-        if (DoDTMethodA(o, NULL, NULL, (Msg)&gl))
+        if (DoDTMethodA(o, NULL, NULL, (Msg)&gl))   /* a gpLayout: its GInfo is the second longword, as DoDTMethodA expects */
             GetDTAttrs(o, PDTA_DestBitMap, (ULONG)&bm, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE);
         if (!bm || !bmh || bmh->bmh_Width <= 0 || bmh->bmh_Height <= 0) {
             DisposeDTObject(o);
