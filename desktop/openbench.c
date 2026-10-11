@@ -18,7 +18,11 @@
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
  *     "+ 8 (m68k)" when the CPU cores board is fitted ("+ 8 (m68k, x86-64)" when its cores run native jobs
  *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
- *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter).
+ *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter);
+ *   - the backdrop's pixels (0.1.15: the picture cut and scaled to cover the screen, then laid over the
+ *     gradient) worked out in bands of rows shared with the cores board's cores, with omc_bands() from
+ *     openmulticore (include/openmulticore/bands.h, copied in; the Team, 11 October 2026). With no
+ *     openmulticore.library or no board, or after an error on a core, every row is done here: the same pixels.
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -86,8 +90,9 @@
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
+#include <openmulticore/bands.h>
 
-#define OPENBENCH_VERSION "0.1.14"
+#define OPENBENCH_VERSION "0.1.15"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -329,9 +334,27 @@ static ULONG bf_entry(register struct Hook *h __asm("a0"), register struct RastP
 }
 
 /* The theme's desktop gradient, top to bottom, until the picture is ready (or without one). */
+/* The backdrop's buffers start on a 16-byte line of their own (bd_alloc, bd_free), so omc_bands() can hand
+ * bands of their rows to the cores (bands.h): AllocVec's memory is only longword aligned. The block
+ * AllocVec gave is kept in the longword before the buffer. */
+static ULONG *bd_alloc(ULONG bytes)
+{
+    UBYTE *m = AllocVec(bytes + 16, MEMF_FAST);
+    ULONG *p;
+    if (!m) return NULL;
+    p = (ULONG *)(((ULONG)m + 16) & ~15UL);
+    p[-1] = (ULONG)m;
+    return p;
+}
+
+static void bd_free(ULONG *p)
+{
+    if (p) FreeVec((APTR)p[-1]);
+}
+
 static ULONG *gradient_backdrop(LONG w, LONG h)
 {
-    ULONG *b = AllocVec((ULONG)w * h * 4, MEMF_FAST);
+    ULONG *b = bd_alloc((ULONG)w * h * 4);
     ogt_grad g;
     LONG y, x;
     if (!b) return NULL;
@@ -406,40 +429,82 @@ static int screen_twin(const char *path, LONG w, LONG h, char *out, int n)
     return 1;
 }
 
-/* The picture cut and scaled to cover W x H (its middle kept where its shape differs), or itself when
- * it is that size already. NULL when there is no memory. */
-static ULONG *cover(ULONG *src, LONG sw, LONG sh, LONG W, LONG H)
+/* The backdrop's pixels for rows y0 to y1 - 1 of the screen: the picture cut and scaled to cover it (its
+ * middle kept where its shape differs; nothing to do when it is the screen's size and in place), alpha
+ * 255 where the picture has none, then laid over the gradient where it has some. A job for omc_bands()
+ * (bands.h): it makes no OS calls, reads the picture and the gradient and writes only its own rows. */
+struct bd_rows {
+    const ULONG *src;                       /* the picture, sw x sh */
+    LONG sw, sh, vw, vh, ox, oy;            /* the part of it that covers the screen */
+    const ULONG *grad;                      /* the gradient, W x H, or NULL */
+    ULONG *dst;                             /* W x H: the picture itself when it is that size */
+    LONG W, H;
+    ULONG opaque;                           /* 0xff000000 for a picture without alpha (they come with alpha 0), else 0 */
+};
+
+static void backdrop_rows(APTR data, ULONG y0, ULONG y1)
 {
-    ULONG *dst;
-    LONG vw, vh, ox, oy, x, y;
-    if (sw == W && sh == H) return src;
-    if (!(dst = AllocVec((ULONG)W * H * 4, MEMF_FAST))) return NULL;
-    if (W * sh > H * sw) { vw = sw; vh = H * sw / W; }    /* the screen is wider: the picture's width */
-    else { vh = sh; vw = W * sh / H; }
-    ox = (sw - vw) / 2;
-    oy = (sh - vh) / 2;
-    for (y = 0; y < H; y++) {
-        ULONG *row = dst + y * W, *s = src + (oy + y * vh / H) * sw + ox;
-        for (x = 0; x < W; x++) row[x] = s[x * vw / W];
+    const struct bd_rows *b = data;
+    ULONG y;
+    LONG x;
+    for (y = y0; y < y1; y++) {
+        ULONG *row = b->dst + y * b->W;
+        const ULONG *g = b->grad ? b->grad + y * b->W : NULL;
+        if (b->src != b->dst) {
+            const ULONG *s = b->src + (b->oy + (LONG)y * b->vh / b->H) * b->sw + b->ox;
+            for (x = 0; x < b->W; x++) row[x] = s[x * b->vw / b->W] | b->opaque;
+        } else if (b->opaque) {
+            for (x = 0; x < b->W; x++) row[x] |= b->opaque;
+        }
+        if (b->opaque) continue;            /* nothing to lay over */
+        for (x = 0; x < b->W; x++) {
+            ULONG p = row[x], a = p >> 24, q, r, gg, bb;
+            if (a == 255) continue;
+            q = g ? g[x] : 0;
+            r = (((p >> 16) & 255) * a + ((q >> 16) & 255) * (255 - a) + 127) / 255;
+            gg = (((p >> 8) & 255) * a + ((q >> 8) & 255) * (255 - a) + 127) / 255;
+            bb = ((p & 255) * a + (q & 255) * (255 - a) + 127) / 255;
+            row[x] = 0xff000000UL | (r << 16) | (gg << 8) | bb;
+        }
     }
-    return dst;
+}
+
+/* The picture made screen-sized and opaque over the gradient, in bands on the cores when there are some
+ * (0.1.15; 0.1.14's cover() and over_gradient() did the same, one after the other, here). The picture
+ * itself when it is the screen's size, else a new buffer; NULL when there is no memory. */
+static ULONG *cover_over(ULONG *src, LONG sw, LONG sh, int alpha, const ULONG *grad, LONG W, LONG H)
+{
+    struct bd_rows b;
+    b.src = src; b.sw = sw; b.sh = sh;
+    b.grad = grad;
+    b.W = W; b.H = H;
+    b.opaque = alpha ? 0 : 0xff000000UL;
+    if (W * sh > H * sw) { b.vw = sw; b.vh = H * sw / W; }    /* the screen is wider: the picture's width */
+    else { b.vh = sh; b.vw = W * sh / H; }
+    b.ox = (sw - b.vw) / 2;
+    b.oy = (sh - b.vh) / 2;
+    if (sw == W && sh == H) b.dst = src;
+    else if (!(b.dst = bd_alloc((ULONG)W * H * 4))) return NULL;
+    omc_bands(NULL, backdrop_rows, &b, (ULONG)H, b.dst, (ULONG)W * 4, 0, NULL);
+    return b.dst;
 }
 
 static ULONG *volatile picture_ready;
 
-/* The picture's pixels as ARGB through its datatype, opaque over the gradient where it has alpha. */
-static ULONG *picture_pixels(const char *path, LONG *pw, LONG *ph)
+/* The picture's pixels as ARGB through its datatype; *alpha 1 when it has alpha of its own. */
+static ULONG *picture_pixels(const char *path, LONG *pw, LONG *ph, int *alpha)
 {
     struct BitMapHeader *bmh = NULL;
     struct pdtBlitPixelArray m;
-    ULONG *px = NULL, n, i;
+    ULONG *px = NULL;
     Object *o;
     *pw = *ph = 0;
+    *alpha = 0;
     if (!DataTypesBase || !(o = NewDTObject((APTR)path, DTA_GroupID, GID_PICTURE, PDTA_Remap, FALSE,
                                             PDTA_DestMode, PMODE_V43, TAG_DONE)))
         return NULL;
     if (GetDTAttrs(o, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE) && bmh && bmh->bmh_Width > 0 && bmh->bmh_Height > 0
-        && (px = AllocVec((ULONG)bmh->bmh_Width * bmh->bmh_Height * 4, MEMF_FAST))) {
+        && (px = bd_alloc((ULONG)bmh->bmh_Width * bmh->bmh_Height * 4))) {
         m.MethodID = PDTM_READPIXELARRAY;
         m.pbpa_PixelData = px;
         m.pbpa_PixelFormat = PBPAFMT_ARGB;
@@ -451,11 +516,9 @@ static ULONG *picture_pixels(const char *path, LONG *pw, LONG *ph)
         if (DoMethodA(o, (Msg)&m)) {             /* DoMethodA: see above */
             *pw = bmh->bmh_Width;
             *ph = bmh->bmh_Height;
-            n = (ULONG)*pw * *ph;
-            if (bmh->bmh_Masking != mskHasAlpha)
-                for (i = 0; i < n; i++) px[i] |= 0xff000000UL;   /* 24-bit pictures come with alpha 0 */
+            *alpha = bmh->bmh_Masking == mskHasAlpha;   /* 24-bit pictures come with alpha 0: cover_over sets it */
         } else {
-            FreeVec(px);
+            bd_free(px);
             px = NULL;
         }
     }
@@ -463,36 +526,21 @@ static ULONG *picture_pixels(const char *path, LONG *pw, LONG *ph)
     return px;
 }
 
-/* A picture with alpha over the gradient (both screen-sized). */
-static void over_gradient(ULONG *pic, const ULONG *grad, ULONG n)
-{
-    ULONG i;
-    for (i = 0; i < n; i++) {
-        ULONG p = pic[i], a = p >> 24, q, r, g, b;
-        if (a == 255) continue;
-        q = grad ? grad[i] : 0;
-        r = (((p >> 16) & 255) * a + ((q >> 16) & 255) * (255 - a) + 127) / 255;
-        g = (((p >> 8) & 255) * a + ((q >> 8) & 255) * (255 - a) + 127) / 255;
-        b = ((p & 255) * a + (q & 255) * (255 - a) + 127) / 255;
-        pic[i] = 0xff000000UL | (r << 16) | (g << 8) | b;
-    }
-}
-
 static void picture_entry(void)
 {
     char twin[300];
     LONG pw = 0, ph = 0;
+    int alpha = 0;
     ULONG *px = NULL, *done = NULL;
     Object *o = NULL;
     struct BitMap *bm = NULL;
     struct BitMapHeader *bmh = NULL;
     /* the screen-sized twin when there is one, else the picture; its pixels through datatypes */
-    if (screen_twin(picture_path, bd_w, bd_h, twin, sizeof twin)) px = picture_pixels(twin, &pw, &ph);
-    if (!px) px = picture_pixels(picture_path, &pw, &ph);
+    if (screen_twin(picture_path, bd_w, bd_h, twin, sizeof twin)) px = picture_pixels(twin, &pw, &ph, &alpha);
+    if (!px) px = picture_pixels(picture_path, &pw, &ph, &alpha);
     if (px) {
-        done = cover(px, pw, ph, bd_w, bd_h);
-        if (done != px) FreeVec(px);
-        if (done) over_gradient(done, backdrop, (ULONG)bd_w * bd_h);
+        done = cover_over(px, pw, ph, alpha, backdrop, bd_w, bd_h);
+        if (done != px) bd_free(px);
     } else if (DataTypesBase && (o = NewDTObject((APTR)picture_path, DTA_GroupID, GID_PICTURE, PDTA_Screen, (ULONG)picture_scr,
                                                  PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43, OBP_Precision, PRECISION_IMAGE,
                                                  TAG_DONE))) {
@@ -1307,7 +1355,7 @@ static int run(void)
             Forbid();
             if (picture_ready) { old = backdrop; backdrop = picture_ready; picture_ready = NULL; }
             Permit();
-            if (old) FreeVec(old);
+            if (old) bd_free(old);
             if (backdrop || pic_bm) {
                 EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
                 draw_icons();
@@ -1354,7 +1402,7 @@ out:
     if (tport) DeleteMsgPort(tport);
     while (ndrawers) close_index(ndrawers - 1);
     while (picture_busy) Delay(5);                  /* the picture's process is in our code */
-    if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
+    if (picture_ready) { bd_free(picture_ready); picture_ready = NULL; }
     if (root) {
         ClearMenuStrip(root);
         {
@@ -1372,7 +1420,7 @@ out:
     if (vi) FreeVisualInfo(vi);
     if (dri) FreeScreenDrawInfo(look.scr, dri);
     free_icons();
-    if (backdrop) { FreeVec(backdrop); backdrop = NULL; }
+    if (backdrop) { bd_free(backdrop); backdrop = NULL; }
     if (pic_obj) {
         pic_bm = NULL;
         DisposeDTObject(pic_obj);
