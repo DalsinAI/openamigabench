@@ -69,13 +69,14 @@
 #include <inline/macros.h>
 
 #include "obmsg.h"
+#include "ob_builtin.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.6"
+#define OPENBENCH_VERSION "0.1.11"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -101,7 +102,7 @@ unsigned long __stack = STACK_NEED;
 #define MAX_WINDOWS 24
 #define MAX_VOLUMES 24
 #define THEME_DIR "SYS:Prefs/Presets/Themes/"
-#define LOGO_PAD "    "                     /* OpenTitle's logo sits before the title (opentitle.c) */
+#define LOGO_PAD "         "                /* OpenTitle's logo sits before the title (opentitle.c; 0.1.11: its bigger logo) */
 
 static const char fallback_theme[] =
     "name Open\nversion 1\nfont \"DejaVu Sans\" 13\n[light]\n"
@@ -720,9 +721,16 @@ static int start_tool(const char *tool, const char *project, LONG stack)
         return 0;
     }
     if (stack < 8192) stack = 8192;
+    /* As Workbench starts a tool: no input or output (Output() is 0 for it) and no current directory
+     * (NP_CurrentDir 0: the tool's own startup makes the WBArg's lock its current directory).
+     * 0.1.7: dos's default input and output (NIL:, closed at the end) made every libnix tool fail on
+     * quitting with 8700000E, a file closed twice. 0.1.10: with a current directory of its own (a DupLock
+     * dos unlocks at the end), a tool that leaves the WBArg's lock as its current directory (Mounter) had
+     * that lock unlocked by dos and again by launch_done: 81000005, memory list corrupt. */
     p = CreateNewProcTags(NP_Seglist, (ULONG)seg, NP_FreeSeglist, FALSE, NP_StackSize, (ULONG)stack,
-                          NP_Name, (ULONG)L->names[0], NP_CurrentDir, (ULONG)DupLock(L->args[0].wa_Lock),
-                          NP_HomeDir, (ULONG)DupLock(L->args[0].wa_Lock), TAG_DONE);
+                          NP_Name, (ULONG)L->names[0], NP_CurrentDir, 0,
+                          NP_HomeDir, (ULONG)DupLock(L->args[0].wa_Lock), NP_Input, 0, NP_Output, 0,
+                          NP_CloseInput, FALSE, NP_CloseOutput, FALSE, TAG_DONE);
     if (!p) {
         UnLoadSeg(seg);
         UnLock(L->args[0].wa_Lock);
@@ -812,8 +820,10 @@ static int find_tool(const char *project, const char *tool, char *out, int n)
  * project opens with its default tool; a program with no icon runs. 1 when done. */
 static int ob_open_object(const char *path)
 {
-    struct DiskObject *o = GetIconTags((CONST_STRPTR)path, ICONGETA_FailIfUnavailable, TRUE, TAG_DONE);
+    struct DiskObject *o;
     int ok = 0;
+    if (ob_builtin_open(path)) return 1;          /* built into OpenBench (ob_builtin_list.h) */
+    o = GetIconTags((CONST_STRPTR)path, ICONGETA_FailIfUnavailable, TRUE, TAG_DONE);
     if (!o) {
         BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
         struct FileInfoBlock *fib = AllocDosObject(DOS_FIB, NULL);
@@ -1281,6 +1291,7 @@ static int run(void)
     }
 
 out:
+    ob_builtin_quit_all();                      /* the built-ins first: their code is ours */
     stop_dock();
     if (timer) {
         AbortIO((struct IORequest *)tr);
