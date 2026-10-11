@@ -9,7 +9,10 @@
  *   - drawers, in the drawer windows approved and built as OpenDrawer (opengadtools workbench/wb_drawer);
  *   - starting things as Workbench starts them: a tool with LoadSeg and a WBStartup message, a project
  *     through its default tool, a drawer or disk in a drawer window; SYS:WBStartup at the start;
- *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date.
+ *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
+ *     "+ 8 (m68k)" when the CPU cores board is fitted ("+ 8 (m68k, x86-64)" when its cores run native jobs
+ *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
+ *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter).
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -69,6 +72,7 @@
 #include <inline/macros.h>
 
 #include "obmsg.h"
+#include "barlogo.h"
 #include "ob_builtin.h"
 #include "wb_drawer.h"
 #include "wb_dir.h"
@@ -76,7 +80,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.11"
+#define OPENBENCH_VERSION "0.1.12"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -102,7 +106,6 @@ unsigned long __stack = STACK_NEED;
 #define MAX_WINDOWS 24
 #define MAX_VOLUMES 24
 #define THEME_DIR "SYS:Prefs/Presets/Themes/"
-#define LOGO_PAD "         "                /* OpenTitle's logo sits before the title (opentitle.c; 0.1.11: its bigger logo) */
 
 static const char fallback_theme[] =
     "name Open\nversion 1\nfont \"DejaVu Sans\" 13\n[light]\n"
@@ -223,18 +226,19 @@ static void thousands(char *out, int n, ULONG v)
 
 /* The boards AmigaChrome presents through AutoConfig (Dalsin $DA15): product 9 a graphics card (ACRTG),
  * product 7 the CPU cores board (ACSV block, CLASS 2, UNITS its cores). As OpenTitle 0.6.10 counts them. */
-static ULONG gpus, cores;
+static ULONG gpus, cores, isas;           /* isas: what the cores run (ISAS, $28; bit 0 m68k always) */
 
 static void count_boards(void)
 {
     struct ConfigDev *cd = NULL;
     gpus = cores = 0;
+    isas = 1;
     if (!(ExpansionBase = (struct ExpansionBase *)OpenLibrary((STRPTR)"expansion.library", 36)))
         return;
     while ((cd = FindConfigDev(cd, 0xDA15, 9)) && gpus < 16) gpus++;
     if ((cd = FindConfigDev(NULL, 0xDA15, 7)) && cd->cd_BoardAddr) {
         volatile ULONG *r = (volatile ULONG *)cd->cd_BoardAddr;
-        if (r[0] == 0x41435356UL && r[0x20 / 4] == 2 && r[0x24 / 4] <= 1024) cores = r[0x24 / 4];
+        if (r[0] == 0x41435356UL && r[0x20 / 4] == 2 && r[0x24 / 4] <= 1024) { cores = r[0x24 / 4]; isas = r[0x28 / 4] | 1; }
     }
     CloseLibrary((struct Library *)ExpansionBase);
     ExpansionBase = NULL;
@@ -243,15 +247,17 @@ static void count_boards(void)
 /* 1 when the title changed. */
 static int make_title(void)
 {
-    char chip[16], fast[16], t[sizeof screen_title];
+    char chip[16], fast[16], t[sizeof screen_title], pad[BARLOGO_MAX_SPACES + 1];
+    count_boards();                           /* each time: the cores board may give its cores after we start */
     thousands(chip, sizeof chip, AvailMem(MEMF_CHIP) >> 10);
     thousands(fast, sizeof fast, AvailMem(MEMF_FAST) >> 10);
+    barlogo_pad(look.scr, pad);               /* made again each time: OpenLook may make the bar taller after we start */
     if (cores)
-        snprintf(t, sizeof t, LOGO_PAD "OpenBench " OPENBENCH_VERSION " - Chip %s KB, Fast %s KB, GPU = %lu, CPU = 1 (m68k) + %lu core%s",
-                 chip, fast, (unsigned long)gpus, (unsigned long)cores, cores == 1 ? "" : "s");
+        snprintf(t, sizeof t, "%sOpenBench " OPENBENCH_VERSION " - Chip %s KB, Fast %s KB, GPU = %lu, CPU = 1 (m68k) + %lu (%s)",
+                 pad, chip, fast, (unsigned long)gpus, (unsigned long)cores, barlogo_isas(isas));
     else
-        snprintf(t, sizeof t, LOGO_PAD "OpenBench " OPENBENCH_VERSION " - Chip %s KB, Fast %s KB, GPU = %lu, CPU = 1 (m68k)",
-                 chip, fast, (unsigned long)gpus);
+        snprintf(t, sizeof t, "%sOpenBench " OPENBENCH_VERSION " - Chip %s KB, Fast %s KB, GPU = %lu, CPU = 1 (m68k)",
+                 pad, chip, fast, (unsigned long)gpus);
     if (!strcmp(t, screen_title))
         return 0;
     strcpy(screen_title, t);
@@ -572,20 +578,45 @@ static void draw_icons(void)
     for (i = 0; i < nicons; i++) draw_icon(&icons[i]);
 }
 
-/* An icon cleared to the backdrop and drawn again, and any icon it overlapped. */
-static void redraw_around(dicon *ic)
+/* A box of the root window cleared to the backdrop, and every icon in it drawn again where it is now. */
+static void redraw_box(LONG x0, LONG y0, LONG x1, LONG y1)
 {
-    LONG x0, y0, x1, y1;
     int i;
-    icon_extent(ic, &x0, &y0, &x1, &y1);
     if (x0 < 0) x0 = 0;
     if (y0 < 0) y0 = 0;
+    if (x1 > root->Width - 1) x1 = root->Width - 1;
+    if (y1 > root->Height - 1) y1 = root->Height - 1;
+    if (x1 < x0 || y1 < y0) return;
     EraseRect(root->RPort, x0, y0, x1, y1);
     for (i = 0; i < nicons; i++) {
         LONG a0, b0, a1, b1;
         icon_extent(&icons[i], &a0, &b0, &a1, &b1);
         if (a0 <= x1 && a1 >= x0 && b0 <= y1 && b1 >= y0) draw_icon(&icons[i]);
     }
+}
+
+/* An icon cleared to the backdrop and drawn again, and any icon it overlapped. */
+static void redraw_around(dicon *ic)
+{
+    LONG x0, y0, x1, y1;
+    icon_extent(ic, &x0, &y0, &x1, &y1);
+    redraw_box(x0, y0, x1, y1);
+}
+
+/* An icon moved to nx, ny (0.1.12): moved first, then the box it left cleared and the icons in it drawn
+ * again, itself included where it overlaps its old box, then itself. 0.1.11 cleared the old box and drew
+ * the icons in it before moving, the moving one among them at its old place: a copy at every step of a
+ * drag (Instance-32, 11 October 2026). */
+static void move_icon(dicon *ic, LONG nx, LONG ny)
+{
+    LONG x0, y0, x1, y1;
+    icon_extent(ic, &x0, &y0, &x1, &y1);
+    ic->ix += nx - ic->x;
+    ic->iy += ny - ic->y;
+    ic->x = nx;
+    ic->y = ny;
+    redraw_box(x0, y0, x1, y1);
+    draw_icon(ic);
 }
 
 static void free_icons(void)
@@ -1076,14 +1107,8 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             if (ny < 0) ny = 0;
             if (nx > root->Width - pressed_on->w) nx = root->Width - pressed_on->w;
             if (ny > root->Height - pressed_on->h - label_h) ny = root->Height - pressed_on->h - label_h;
-            if (nx != ox || ny != oy) {
-                redraw_around(pressed_on);           /* where it was: the backdrop again */
-                pressed_on->ix += nx - ox;
-                pressed_on->iy += ny - oy;
-                pressed_on->x = nx;
-                pressed_on->y = ny;
-                draw_icon(pressed_on);
-            }
+            if (nx != ox || ny != oy)
+                move_icon(pressed_on, nx, ny);
         }
         break;
     case IDCMP_DISKINSERTED:
