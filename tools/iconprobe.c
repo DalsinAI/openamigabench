@@ -38,7 +38,7 @@
 #include <proto/intuition.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.6 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.7 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 struct GfxBase *GfxBase;
@@ -895,7 +895,7 @@ static void review_cases(const char *temp)
 #define CH 72
 #define AT_X 24
 #define AT_Y 16
-#define MAX_DUMPS 8
+#define MAX_DUMPS 3              /* for each icon, before and after LayoutIconA */
 
 static struct RastPort canvas;
 static UBYTE pixels[2][CW * CH];
@@ -1016,6 +1016,7 @@ static void drawing(void)
         for (lay = 0; lay < 2; lay++) {
             LONG e;
             struct DiskObject *a = get(os_base, icons[i], &e), *b = get(our_base, icons[i], &e);
+            dumps = 0;
             if (!a || !b) {
                 num("read", icons[i], a != NULL, b != NULL);
             } else {
@@ -1027,7 +1028,7 @@ static void drawing(void)
                     lb = LayoutIconA(b, scr, NULL);
                     num("layout says", icons[i], la, lb);
                 }
-                for (v = 0; v < 6; v++) {
+                for (v = 0; v < 7; v++) {
                     struct TagItem t[3];
                     char w[80];
                     STRPTR label = v == 1 || v == 5 ? (STRPTR)"Label" : NULL;
@@ -1039,10 +1040,11 @@ static void drawing(void)
                     case 3: t[0].ti_Tag = ICONDRAWA_Borderless; t[0].ti_Data = TRUE; break;
                     case 4: t[0].ti_Tag = ICONDRAWA_EraseBackground; t[0].ti_Data = FALSE; break;
                     case 5: t[0].ti_Tag = ICONDRAWA_DrawInfo; t[0].ti_Data = (ULONG)dri; break;
+                    case 6: t[0].ti_Tag = ICONDRAWA_Frameless; t[0].ti_Data = FALSE; break;
                     }
                     snprintf(w, sizeof w, "%s%s %s", icons[i] + 28, lay ? " laid out" : "",
                              (const char *const[]){ "plain", "label", "frameless", "borderless", "no erase",
-                                                    "label+drawinfo" }[v]);
+                                                    "label+drawinfo", "framed" }[v]);
                     for (s = 0; s < 3; s++)
                         one_drawing(w, a, b, label, t, states[s]);
                 }

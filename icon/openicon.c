@@ -1279,13 +1279,16 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
 }
 
 /* ---- drawing (step R3) ----
- * An icon is its picture, with a frame around it unless it's frameless,
- * and its label centred under it. A colour picture is drawn with the pens
- * LayoutIconA got from the screen; until then (or with colour icons off)
- * the classic picture is drawn. Everything here works on a 68040 with no
- * graphics card: graphics.library's own calls only. */
-
-#define LABEL_GAP 1                 /* rows between the picture (or its frame) and the label */
+ * As 3.2 draws (iconprobe 0.6 at 8801133): an icon is a box, the picture
+ * with the emboss rectangle's margins round it (none when borderless),
+ * its top left where the caller says; the picture inside, erased to the
+ * background first; a frame on the box's edge only when the icon isn't
+ * frameless (3.2 is frameless by default); and the label in a box of its
+ * own straight under it, one pixel of background round the text but under
+ * it, centred on the icon. A colour picture is drawn with the pens
+ * LayoutIconA got from the screen; until then the classic picture is
+ * drawn. graphics.library's own calls only, so a 68040 with no graphics
+ * card draws every icon. */
 
 static void release_pens(struct OIObject *o)
 {
@@ -1336,13 +1339,15 @@ static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *
     return TRUE;
 }
 
-/* What DrawIconStateA and GetIconRectangleA both work from. */
+/* What DrawIconStateA and GetIconRectangleA both work from, all from the
+ * box's top left. */
 struct shape {
     LONG w, h;                      /* the picture */
+    LONG px, py;                    /* where the picture goes in the box */
+    LONG bw, bh;                    /* the box */
     BOOL colour;                    /* drawn from pal[], with the pens */
-    BOOL frame;                     /* a frame around it, the emboss rectangle's size */
-    BOOL border;                    /* room kept for the frame */
-    LONG lx, ly, lw, lh, llen;      /* the label, from the picture's top left */
+    BOOL frame;                     /* a frame on the box's edge */
+    LONG lx, ly, lw, lh, llen;      /* the label's box, and its text's length */
 };
 
 static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, struct TagItem *tags, struct shape *sh)
@@ -1350,6 +1355,7 @@ static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, st
     struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
     struct ic_icon *ic = o ? o->icon : NULL;
     struct Image *im = (struct Image *)d->do_Gadget.GadgetRender;
+    BOOL border = !GetTagData(ICONDRAWA_Borderless, FALSE, tags);
     LONG frameless;
     sh->colour = ic && ic->pal[0] && o->screen && Base->coloricons;
     if (sh->colour) {
@@ -1362,16 +1368,19 @@ static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, st
         sh->w = d->do_Gadget.Width;
         sh->h = d->do_Gadget.Height;
     }
-    frameless = (LONG)GetTagData(ICONDRAWA_Frameless, ic && ic->pal[0] ? (ic->frameless || Base->frameless) : FALSE, tags);
-    sh->border = !GetTagData(ICONDRAWA_Borderless, FALSE, tags);
-    sh->frame = sh->border && !frameless;
+    frameless = (LONG)GetTagData(ICONDRAWA_Frameless, Base->frameless || (ic && ic->pal[0] && ic->frameless), tags);
+    sh->frame = border && !frameless;
+    sh->px = border ? -Base->emboss.MinX : 0;
+    sh->py = border ? -Base->emboss.MinY : 0;
+    sh->bw = sh->w + (border ? Base->emboss.MaxX - Base->emboss.MinX : 0);
+    sh->bh = sh->h + (border ? Base->emboss.MaxY - Base->emboss.MinY : 0);
     sh->lx = sh->ly = sh->lw = sh->lh = sh->llen = 0;
     if (label) {
         sh->llen = (LONG)slen((const char *)label);
-        sh->lw = TextLength(rp, label, (UWORD)sh->llen);
-        sh->lh = rp->TxHeight;
-        sh->lx = (sh->w - sh->lw) / 2;
-        sh->ly = sh->h + (sh->border ? Base->emboss.MaxY : 0) + LABEL_GAP;
+        sh->lw = TextLength(rp, label, (UWORD)sh->llen) + 2;
+        sh->lh = rp->TxHeight + 1;
+        sh->lx = (sh->bw - sh->lw) / 2;    /* C's division: -1.5 is -1, as 3.2 */
+        sh->ly = sh->bh;
     }
 }
 
@@ -1384,20 +1393,14 @@ static BOOL L_GetIconRectangleA(REG(a0, struct RastPort *rp), REG(a1, struct Dis
     shape_of(rp, d, label, tags, &sh);
     rect->MinX = 0;
     rect->MinY = 0;
-    rect->MaxX = (WORD)(sh.w - 1);
-    rect->MaxY = (WORD)(sh.h - 1);
-    if (sh.border) {
-        rect->MinX += Base->emboss.MinX;
-        rect->MinY += Base->emboss.MinY;
-        rect->MaxX += Base->emboss.MaxX;
-        rect->MaxY += Base->emboss.MaxY;
-    }
+    rect->MaxX = (WORD)(sh.bw - 1);
+    rect->MaxY = (WORD)(sh.bh - 1);
     if (label) {
         if (sh.lx < rect->MinX)
             rect->MinX = (WORD)sh.lx;
         if (sh.lx + sh.lw - 1 > rect->MaxX)
             rect->MaxX = (WORD)(sh.lx + sh.lw - 1);
-        rect->MaxY = (WORD)(sh.ly + sh.lh - 1);
+        rect->MaxY = (WORD)(sh.ly + sh.lh);     /* one row more than is drawn, as 3.2 */
     }
     return TRUE;
 }
@@ -1433,7 +1436,8 @@ static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, 
 static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
                              REG(d0, LONG x), REG(d1, LONG y), REG(d2, ULONG state), REG(a3, struct TagItem *tags))
 {
-    static const UWORD ghost[2] = { 0x8888, 0x2222 };
+    /* 3.2's ghost, on the screen's grid: every 4th pixel, shifted 2 a row */
+    static const UWORD ghost[2] = { 0x4444, 0x1111 };
     struct DrawInfo *dri = (struct DrawInfo *)GetTagData(ICONDRAWA_DrawInfo, 0, tags);
     BOOL erase = (BOOL)GetTagData(ICONDRAWA_EraseBackground, TRUE, tags);
     struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
@@ -1445,39 +1449,36 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     ULONG apen, bpen, drmd;
     UWORD *afpt;
     UBYTE afsize;
+    LONG ix, iy;
     if (!rp || !d)
         return;
     shape_of(rp, d, label, tags, &sh);
+    ix = x + sh.px;
+    iy = y + sh.py;
     apen = GetAPen(rp);
     bpen = GetBPen(rp);
     drmd = GetDrMd(rp);
     afpt = rp->AreaPtrn;
     afsize = rp->AreaPtSz;
     SetDrMd(rp, JAM1);
-    if (sh.border) {
-        LONG x0 = x + Base->emboss.MinX, y0 = y + Base->emboss.MinY;
-        LONG x1 = x + sh.w - 1 + Base->emboss.MaxX, y1 = y + sh.h - 1 + Base->emboss.MaxY;
-        if (erase) {
-            SetAPen(rp, pen_bg);
-            RectFill(rp, x0, y0, x1, y1);
-        }
-        if (sh.frame) {
-            /* raised, or pressed in when selected */
-            SetAPen(rp, selected ? pen_shadow : pen_shine);
-            Move(rp, x0, y1 - 1);
-            Draw(rp, x0, y0);
-            Draw(rp, x1 - 1, y0);
-            SetAPen(rp, selected ? pen_shine : pen_shadow);
-            Move(rp, x1, y0);
-            Draw(rp, x1, y1);
-            Draw(rp, x0, y1);
-        }
-    } else if (erase) {
+    if (erase) {
         SetAPen(rp, pen_bg);
-        RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+        RectFill(rp, x, y, x + sh.bw - 1, y + sh.bh - 1);
+    }
+    if (sh.frame) {
+        /* raised, or pressed in when selected (not yet measured: 3.2 is frameless by default) */
+        LONG x1 = x + sh.bw - 1, y1 = y + sh.bh - 1;
+        SetAPen(rp, selected ? pen_shadow : pen_shine);
+        Move(rp, x, y1 - 1);
+        Draw(rp, x, y);
+        Draw(rp, x1 - 1, y);
+        SetAPen(rp, selected ? pen_shine : pen_shadow);
+        Move(rp, x1, y);
+        Draw(rp, x1, y1);
+        Draw(rp, x, y1);
     }
     if (sh.colour) {
-        draw_colour(rp, o, selected, x, y);
+        draw_colour(rp, o, selected, ix, iy);
     } else {
         struct Image *im = (struct Image *)d->do_Gadget.GadgetRender;
         struct Image *sel = (struct Image *)d->do_Gadget.SelectRender;
@@ -1485,30 +1486,35 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
         if (selected && high == GFLG_GADGHIMAGE && sel)
             im = sel;
         if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE))
-            DrawImage(rp, im, x, y);
+            DrawImage(rp, im, ix, iy);
         if (selected && (high == GFLG_GADGHCOMP || (high == GFLG_GADGHIMAGE && !sel))) {
             SetDrMd(rp, COMPLEMENT);
-            RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+            RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
             SetDrMd(rp, JAM1);
         } else if (selected && high == GFLG_GADGHBOX) {
             SetDrMd(rp, COMPLEMENT);
-            Move(rp, x - 4, y - 2);
-            Draw(rp, x + sh.w + 3, y - 2);
-            Draw(rp, x + sh.w + 3, y + sh.h + 1);
-            Draw(rp, x - 4, y + sh.h + 1);
-            Draw(rp, x - 4, y - 2);
+            Move(rp, ix - 4, iy - 2);
+            Draw(rp, ix + sh.w + 3, iy - 2);
+            Draw(rp, ix + sh.w + 3, iy + sh.h + 1);
+            Draw(rp, ix - 4, iy + sh.h + 1);
+            Draw(rp, ix - 4, iy - 2);
             SetDrMd(rp, JAM1);
         }
     }
     if (state == IDS_DISABLED || state == IDS_SELECTEDDISABLED) {
         SetAPen(rp, pen_block);
         SetAfPt(rp, (UWORD *)ghost, 1);
-        RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+        RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
         SetAfPt(rp, afpt, afsize);
     }
     if (label && sh.llen) {
+        LONG lx = x + sh.lx, ly = y + sh.ly;
+        if (erase) {
+            SetAPen(rp, pen_bg);
+            RectFill(rp, lx, ly, lx + sh.lw - 1, ly + sh.lh - 1);
+        }
         SetAPen(rp, pen_text);
-        Move(rp, x + sh.lx, y + sh.ly + rp->TxBaseline);
+        Move(rp, lx + 1, ly + 1 + rp->TxBaseline);
         Text(rp, label, (UWORD)sh.llen);
     }
     SetAPen(rp, apen);
@@ -1691,8 +1697,8 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
     b->newicons = TRUE;             /* 3.2 says so but shows no NewIcon colour picture; we do (ours only) */
     b->coloricons = TRUE;
     b->maxnamelen = 25;
-    b->emboss.MinX = b->emboss.MinY = -3;   /* a guess until iconprobe 0.6 measures 3.2's */
-    b->emboss.MaxX = b->emboss.MaxY = 3;
+    b->emboss.MinX = b->emboss.MinY = -1;   /* as 3.2's (iconprobe 0.6 at 8801133) */
+    b->emboss.MaxX = b->emboss.MaxY = 1;
     Base = b;
     return &b->lib;
 }
