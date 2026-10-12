@@ -21,6 +21,9 @@ LIB="$COMMON -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns -fno
 "$CC" $LIB -o "$OUT/icon.library" "$HERE/icon/iconlib.c" "$HERE/proxy/proxy.c" -lgcc
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
+# alohaprobe: what Intuition tells a Workbench, and when (the native screen mode's step 4; lab only)
+# shellcheck disable=SC2086
+"$CC" $COMMON -o "$OUT/alohaprobe" "$HERE/tools/alohaprobe.c"
 cp "$HERE/lab/Install-R1" "$HERE/lab/Uninstall-R1" "$OUT/"
 size() { wc -c < "$1" | tr -d ' '; }
-echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes)"
+echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), alohaprobe ($(size "$OUT/alohaprobe") bytes)"
