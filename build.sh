@@ -19,8 +19,26 @@ LIB="$COMMON -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns -fno
 "$CC" $LIB -o "$OUT/workbench.library" "$HERE/workbench/wblib.c" "$HERE/proxy/proxy.c" -lgcc
 # shellcheck disable=SC2086
 "$CC" $LIB -o "$OUT/icon.library" "$HERE/icon/iconlib.c" "$HERE/proxy/proxy.c" -lgcc
+# Step R2: icon.library's own calls, not switched on: openicon.library
+# (icon.library's table under a test name) and iconprobe, which calls it
+# and Hyperion's side by side.
+# shellcheck disable=SC2086
+"$CC" $LIB -Wextra -c -o /dev/null "$HERE/icon/icon_core.c"
+# shellcheck disable=SC2086
+"$CC" $LIB -o "$OUT/openicon.library" "$HERE/icon/openicon.c" "$HERE/icon/icon_core.c" -lgcc
+und=$("$STOVE/prefix/bin/m68k-amigaos-nm" -u "$OUT/openicon.library" || true)
+[ -z "$und" ] || { echo "undefined in openicon.library: $und" >&2; exit 1; }
+# shellcheck disable=SC2086
+"$CC" $COMMON -o "$OUT/iconprobe" "$HERE/tools/iconprobe.c"
+# the host tests' icons, for iconprobe in a lab (SYS:Storage/OpenBench-Icons)
+if command -v python3 >/dev/null; then
+  rm -rf "$OUT/OpenBench-Icons"
+  python3 "$HERE/tests/host/icon_fixtures.py" "$OUT/OpenBench-Icons" >/dev/null
+  rm -f "$OUT/OpenBench-Icons/"*.want "$OUT/OpenBench-Icons/manifest.txt" "$OUT/OpenBench-Icons/deflate.bin"
+fi
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
 cp "$HERE/lab/Install-R1" "$HERE/lab/Uninstall-R1" "$OUT/"
 size() { wc -c < "$1" | tr -d ' '; }
-echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes)"
+echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), openicon.library ($(size "$OUT/openicon.library") bytes), iconprobe ($(size "$OUT/iconprobe") bytes)"
+sha256sum "$OUT/openicon.library" "$OUT/iconprobe" 2>/dev/null || true
