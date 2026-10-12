@@ -24,6 +24,16 @@
  *     "+ 8 (m68k)" when the CPU cores board is fitted ("+ 8 (m68k, x86-64)" when its cores run native jobs
  *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
  *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter).
+ *   - Workbench's settings (0.1.19): ENV:Sys/Workbench.prefs, Prefs/Workbench's file, read at the start and again
+ *     whenever it changes: a tool started from an icon gets at least its default stack, and the devices it
+ *     hides have no icon on the desktop. ENV:Sys/WBPattern.prefs is watched too: a new root picture (or
+ *     none) shows at once, and the old picture's file is let go;
+ *   - IPrefs' reset of the Workbench screen (0.1.19; Font prefs' Use, a screen mode): told through OpenLook's
+ *     close notice (Common/wbclose.h, as the dock and OpenMeters are), OpenBench closes its root window, its
+ *     drawers and its Information windows and lets go of the screen, then opens them again on the new one;
+ *   - quitting (0.1.19): programs started from OpenBench (OpenMeters from SYS:WBStartup, say) are asked to quit
+ *     with Ctrl-C, which they answer, as their code is OpenBench's to unload; before, quitting waited for them
+ *     for ever;
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -53,6 +63,7 @@
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
 #include <dos/filehandler.h>
+#include <dos/notify.h>
 #include <devices/timer.h>
 #include <devices/input.h>
 #include <devices/inputevent.h>
@@ -74,6 +85,7 @@
 #include <proto/dos.h>
 #include <proto/intuition.h>
 #include <proto/graphics.h>
+#include <proto/layers.h>
 #include <proto/gadtools.h>
 #include <proto/icon.h>
 #include <proto/wb.h>
@@ -84,6 +96,7 @@
 #include <inline/macros.h>
 
 #include "obmsg.h"
+#include "wbclose.h"
 #include "barlogo.h"
 #include "ob_builtin.h"
 #include "ob_info.h"
@@ -96,7 +109,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.18"
+#define OPENBENCH_VERSION "0.1.19"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -390,6 +403,66 @@ static int root_picture(char *out, int n)
             }
         }
         i += 8 + sz + (sz & 1);
+    }
+    return 0;
+}
+
+/* Workbench's settings (ENV:Sys/Workbench.prefs, Prefs/Workbench's file, which IPrefs hands to Hyperion's
+ * Workbench), the ones the desktop has a use for: the default stack size (the WBNC chunk's first long word),
+ * which a tool gets when its icon asks for less, and the hidden devices (a WBHD chunk each, the device's
+ * name), whose volumes get no icon. Before 0.1.19 OpenBench read none of it. */
+#define MAX_HIDDEN 16
+static ULONG wb_stack = 8192;
+static char wb_hidden[MAX_HIDDEN][32];
+static int wb_nhidden;
+
+static ULONG be32(const UBYTE *p)
+{
+    return ((ULONG)p[0] << 24) | ((ULONG)p[1] << 16) | ((ULONG)p[2] << 8) | p[3];
+}
+
+static void wb_prefs_load(void)
+{
+    BPTR f = Open((CONST_STRPTR)"ENV:Sys/Workbench.prefs", MODE_OLDFILE);
+    UBYTE buf[2048];
+    LONG len, i;
+    wb_stack = 8192;
+    wb_nhidden = 0;
+    if (!f) return;
+    len = Read(f, buf, sizeof buf);
+    Close(f);
+    if (len < 12 || be32(buf) != 0x464F524DUL || be32(buf + 8) != 0x50524546UL) return;   /* FORM, PREF */
+    for (i = 12; i + 8 <= len; ) {
+        ULONG id = be32(buf + i), sz = be32(buf + i + 4);
+        const UBYTE *d = buf + i + 8;
+        if (sz > (ULONG)(len - i - 8)) break;
+        if (id == 0x57424E43UL && sz >= 4) {                /* WBNC: wbp_DefaultStackSize first */
+            ULONG st = be32(d);
+            if (st > wb_stack && st <= 1024 * 1024) wb_stack = st;
+        } else if (id == 0x57424844UL && sz > 1 && wb_nhidden < MAX_HIDDEN) {   /* WBHD: a device's name */
+            int k = 0;
+            while (k < (int)sz && k < (int)sizeof wb_hidden[0] - 1 && d[k] && d[k] != ':') {
+                wb_hidden[wb_nhidden][k] = (char)d[k];
+                k++;
+            }
+            wb_hidden[wb_nhidden][k] = 0;
+            if (k) wb_nhidden++;
+        }
+        i += 8 + sz + (sz & 1);
+    }
+}
+
+/* 1 when the BCPL name b is one of the hidden devices, case aside. */
+static int device_hidden(const UBYTE *b)
+{
+    int i, k;
+    if (!b) return 0;
+    for (i = 0; i < wb_nhidden; i++) {
+        int n = (int)strlen(wb_hidden[i]);
+        if (b[0] != n) continue;
+        for (k = 0; k < n; k++)
+            if ((b[1 + k] | 0x20) != (wb_hidden[i][k] | 0x20)) break;
+        if (k == n) return 1;
     }
     return 0;
 }
@@ -696,6 +769,17 @@ static const char *drive_kind(struct DosList *start, const struct DosList *vol)
     return "Harddisk";
 }
 
+/* 1 when the volume is in a device Workbench's settings hide (wb_prefs_load). Called with the DOS list
+ * locked for volumes and devices; start is what LockDosList gave. */
+static int volume_hidden(struct DosList *start, const struct DosList *vol)
+{
+    struct DosList *d = start;
+    if (!wb_nhidden) return 0;
+    while ((d = NextDosEntry(d, LDF_DEVICES)))
+        if (d->dol_Task == vol->dol_Task && device_hidden((const UBYTE *)BADDR(d->dol_Name))) return 1;
+    return 0;
+}
+
 /* The mounted volumes, their Disk.info (where there is none, the default icon for their kind of drive),
  * placed where their icons say, the rest down the left. */
 static void scan_volumes(void)
@@ -709,6 +793,7 @@ static void scan_volumes(void)
         UBYTE *b = (UBYTE *)BADDR(dl->dol_Name);
         int n;
         if (!dl->dol_Task || !b) continue;          /* not in a drive */
+        if (volume_hidden(start, dl)) continue;     /* hidden in Workbench's settings */
         n = b[0] < 63 ? b[0] : 63;
         memcpy(icons[nicons].name, b + 1, (size_t)n);
         icons[nicons].name[n] = 0;
@@ -766,10 +851,12 @@ typedef struct launch {
     struct WBStartup wbs;
     struct WBArg args[2];
     char names[2][108];
+    struct launch *next;                    /* the tools running, for asking them to quit */
 } launch;
 
 static struct MsgPort *launch_port;
 static int running;                         /* tools started whose message hasn't come back */
+static launch *launches;
 
 static int open_drawer(const char *path);
 
@@ -810,7 +897,7 @@ static int start_tool(const char *tool, const char *project, LONG stack)
         FreeVec(L);
         return 0;
     }
-    if (stack < 8192) stack = 8192;
+    if (stack < (LONG)wb_stack) stack = (LONG)wb_stack;   /* Workbench's default stack, 8192 at the least */
     /* As Workbench starts a tool: no input or output (Output() is 0 for it) and no current directory
      * (NP_CurrentDir 0: the tool's own startup makes the WBArg's lock its current directory).
      * 0.1.7: dos's default input and output (NIL:, closed at the end) made every libnix tool fail on
@@ -836,6 +923,8 @@ static int start_tool(const char *tool, const char *project, LONG stack)
     L->wbs.sm_NumArgs = n;
     L->wbs.sm_ToolWindow = NULL;
     L->wbs.sm_ArgList = L->args;
+    L->next = launches;
+    launches = L;
     PutMsg(&p->pr_MsgPort, &L->wbs.sm_Message);
     running++;
     return 1;
@@ -843,12 +932,59 @@ static int start_tool(const char *tool, const char *project, LONG stack)
 
 static void launch_done(launch *L)
 {
+    launch **pp;
     int i;
+    for (pp = &launches; *pp; pp = &(*pp)->next)
+        if (*pp == L) { *pp = L->next; break; }
     UnLoadSeg(L->wbs.sm_Segment);
     for (i = 0; i < L->wbs.sm_NumArgs && i < 2; i++)
         if (L->args[i].wa_Lock) UnLock(L->args[i].wa_Lock);
     FreeVec(L);
     running--;
+}
+
+/* The tools that have ended, their code unloaded. */
+static void launches_reap(void)
+{
+    struct Message *lm;
+    while ((lm = GetMsg(launch_port))) launch_done((launch *)lm);
+}
+
+/* The names of the tools still running, one to a line, for a requester. */
+static void running_names(char *out, int n)
+{
+    launch *L;
+    int k = 0, shown = 0;
+    out[0] = 0;
+    for (L = launches; L && k < n - 1; L = L->next) {
+        if (++shown > 8) { snprintf(out + k, (size_t)(n - k), "  and %d more\n", running - 8); break; }
+        int start = k + 2;
+        k += snprintf(out + k, (size_t)(n - k), "  %s\n", L->names[0]);
+        if (k >= n) k = n - 1;
+        for (; start < k; start++)
+            if (out[start] == '%') out[start] = '_';  /* the requester's text is a format */
+        if (k >= n - 1) break;
+    }
+}
+
+/* 0.1.19: the tools started from OpenBench are asked to quit, with Ctrl-C as a Shell's Break asks, and waited
+ * for up to secs seconds. Their code is OpenBench's to unload, so it can't go before them: OpenMeters from
+ * SYS:WBStartup kept OpenBench's quit waiting for ever. 1 when none is left. */
+static int ask_running_to_quit(int secs)
+{
+    launch *L;
+    int i;
+    launches_reap();
+    Forbid();
+    for (L = launches; L; L = L->next)                 /* not yet replied: its process is there */
+        if (L->wbs.sm_Message.mn_Node.ln_Type != NT_REPLYMSG && L->wbs.sm_Process)
+            Signal(L->wbs.sm_Process->mp_SigTask, SIGBREAKF_CTRL_C);
+    Permit();
+    for (i = 0; running && i < secs * 10; i++) {
+        Delay(5);
+        launches_reap();
+    }
+    return !running;
 }
 
 /* 1 when the file is a program (an AmigaDOS load file: HUNK_HEADER). */
@@ -985,13 +1121,18 @@ static void run_wbstartup(void)
 
 /* ---- drawer windows -------------------------------------------------------------------------- */
 
+/* what each drawer window was opened on, to open it again after a reset of the Workbench screen */
+static char drawer_paths[MAX_WINDOWS][256];
+
 static int open_drawer(const char *path)
 {
     wb_drawer *d;
+    if (!root) return 0;                            /* the Workbench screen is being reset */
     if (ndrawers >= MAX_WINDOWS || !(d = wb_drawer_open(&look, path))) {
         DisplayBeep(look.scr);
         return 0;
     }
+    snprintf(drawer_paths[ndrawers], sizeof drawer_paths[0], "%s", path);
     drawers[ndrawers++] = d;
     return 1;
 }
@@ -1000,6 +1141,7 @@ static void close_index(int i)
 {
     wb_drawer_close(drawers[i]);
     drawers[i] = drawers[--ndrawers];
+    memcpy(drawer_paths[i], drawer_paths[ndrawers], sizeof drawer_paths[0]);
 }
 
 static void titles_everywhere(void)
@@ -1253,10 +1395,25 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             case M_LOADWB:
             case M_QUIT:
                 if (running) {
-                    /* their code is unloaded when they end, by us: as Workbench, we can't go before them */
-                    ask("OpenBench", "Programs started from OpenBench are still running.\n"
-                        "OpenBench can quit when they have ended.", "OK");
-                    break;
+                    /* their code is unloaded when they end, by us: as Workbench, we can't go before them.
+                     * 0.1.19: they can be asked to quit (OpenMeters from SYS:WBStartup never ends by itself) */
+                    char names[400], text[600];
+                    launches_reap();
+                    running_names(names, sizeof names);
+                    if (running) {
+                        snprintf(text, sizeof text, "These programs started from OpenBench are still running:\n%s\n"
+                                 "OpenBench can quit when they have ended.", names);
+                        if (!ask("OpenBench", text, "Ask them to quit|Cancel")) break;
+                        if (!ask_running_to_quit(5)) {
+                            running_names(names, sizeof names);
+                            snprintf(text, sizeof text, "These programs haven't quit:\n%s\n"
+                                     "Quit them yourself, then quit OpenBench again.", names);
+                            ask("OpenBench", text, "OK");
+                            break;
+                        }
+                        if (id == M_LOADWB) quit_to_wb = 1;
+                        return 0;
+                    }
                 }
                 if (id == M_QUIT) {
                     if (ask("OpenBench", "Quit OpenBench?\nThere will be no desktop until it is started again\n"
@@ -1280,13 +1437,156 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
 
 static int run_shell;
 
+/* ---- the desktop on the Workbench screen, and its reset ---------------------------------------- *
+ * 0.1.19: IPrefs resets the Workbench screen (CloseWorkBench, then OpenWorkBench) when Font prefs' Use or a
+ * new screen mode changes it. OpenLook's close notice (Common/wbclose.h) tells OpenBench first, as it tells
+ * the dock and OpenMeters: OpenBench closes everything it has on the screen and lets go of it, answers, and
+ * opens it all again when the screen is back. Before, its root window never answered, and Intuition's
+ * requester asked for "<No title>" to be closed. */
+static struct MsgPort *idcmp;
+static APTR vi;
+static struct Menu *menus;
+
+/* The picture, decoded in a process of its own (0.1.3): IPrefs' root picture; ENV:OpenBench/NoPicture, none. */
+static void start_picture(void)
+{
+    if (picture_busy || Lock_exists("ENV:OpenBench/NoPicture") || !root_picture(picture_path, sizeof picture_path))
+        return;
+    if (!DataTypesBase && !(DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 44)))
+        return;
+    picture_scr = look.scr;
+    picture_busy = 1;
+    if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
+                           NP_Priority, -1, TAG_DONE))
+        picture_busy = 0;
+}
+
+/* The pictures behind the desktop given up: the decoded one, the datatype's (whose file it keeps open), the
+ * gradient. With the root window's layer locked, as its backfill reads them from whichever task draws. */
+static void drop_picture(void)
+{
+    ULONG *old;
+    Object *o;
+    while (picture_busy) Delay(5);                  /* the picture's process is in our code */
+    if (root) LockLayer(0, root->WLayer);
+    old = backdrop;
+    backdrop = NULL;
+    o = pic_obj;
+    pic_bm = NULL;
+    pic_obj = NULL;
+    if (root) UnlockLayer(root->WLayer);
+    if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
+    if (old) FreeVec(old);
+    if (o) DisposeDTObject(o);
+}
+
+/* 0.1.19: ENV:Sys/WBPattern.prefs changed: the new root picture shows, or the gradient alone, and the old
+ * picture's file is let go (OpenUpTool UNINSTALL couldn't delete a backdrop picture OpenBench held open). */
+static void new_picture(void)
+{
+    ULONG *grad;
+    drop_picture();
+    grad = gradient_backdrop(bd_w, bd_h);
+    LockLayer(0, root->WLayer);
+    backdrop = grad;
+    UnlockLayer(root->WLayer);
+    EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+    draw_icons();
+    start_picture();
+}
+
+/* Everything OpenBench has on the Workbench screen given up, the screen too: before a reset, and at the end.
+ * The drawers' paths are kept, to open them again. */
+static void desktop_down(void)
+{
+    ob_info_quit_all();                         /* the Information windows (they close without saving) */
+    while (ndrawers) close_index(ndrawers - 1); /* close_index keeps drawer_paths[] beyond ndrawers */
+    drop_picture();
+    if (root) {
+        ClearMenuStrip(root);
+        {
+            struct IntuiMessage *m;
+            Forbid();
+            while ((m = (struct IntuiMessage *)GetMsg(root->UserPort))) ReplyMsg(&m->ExecMessage);
+            root->UserPort = NULL;
+            ModifyIDCMP(root, 0);
+            Permit();
+        }
+        CloseWindow(root);
+        root = NULL;
+    }
+    if (menus) { FreeMenus(menus); menus = NULL; }
+    if (vi) { FreeVisualInfo(vi); vi = NULL; }
+    if (dri) { FreeScreenDrawInfo(look.scr, dri); dri = NULL; }
+    free_icons();
+    if (look.font) { CloseFont(look.font); look.font = NULL; }
+    if (look.ctx) { ogt_ctx_free(&ctx); look.ctx = NULL; }
+    ogt_theme_free(&theme);
+    if (look.scr) { UnlockPubScreen(NULL, look.scr); look.scr = NULL; }
+}
+
+/* The desktop on the Workbench screen: the theme, the root window with its menus and icons, the picture.
+ * 1 when it is up; 0 with whatever was opened still to be given up with desktop_down. */
+static int desktop_up(void)
+{
+    int mode;
+    if (!look.scr && !(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) return 0;
+    load_theme(&mode);
+    if (!ogt_ctx_init(&ctx, look.scr, &theme, mode) && !ogt_ctx_init(&ctx, look.scr, &theme, OGT_LIGHT)) return 0;
+    look.ctx = &ctx;
+    look.font = ogt_open_font(&theme, look.scr, &ta);
+    look.ta = &ta;
+    make_title();
+
+    /* the backdrop: the theme's gradient now, the picture when it is decoded */
+    bd_w = look.scr->Width;
+    bd_h = look.scr->Height;
+    backdrop = gradient_backdrop(bd_w, bd_h);
+    backfill_hook.h_Entry = (ULONG (*)())bf_entry;
+    root = OpenWindowTags(NULL, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
+                          WA_Height, look.scr->Height - look.scr->BarHeight - 1, WA_PubScreen, (ULONG)look.scr,
+                          WA_Backdrop, TRUE, WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_BackFill, (ULONG)&backfill_hook,
+                          WA_ReportMouse, TRUE, WA_NewLookMenus, TRUE, WA_Activate, TRUE,
+                          WA_ScreenTitle, (ULONG)screen_title, WA_IDCMP, 0, TAG_DONE);
+    if (!root) return 0;
+    root->UserPort = idcmp;
+    ModifyIDCMP(root, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_REFRESHWINDOW | IDCMP_MENUPICK |
+                      IDCMP_DISKINSERTED | IDCMP_DISKREMOVED);
+    if (look.font) SetFont(root->RPort, look.font);
+    SetDrMd(root->RPort, JAM1);
+    label_h = root->RPort->TxHeight;
+    dri = GetScreenDrawInfo(look.scr);
+    if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(newmenus, TAG_DONE)) &&
+        LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
+        SetMenuStrip(root, menus);
+    scan_volumes();
+    draw_icons();
+    titles_everywhere();
+    start_picture();
+    return 1;
+}
+
+/* ENV:Sys's two files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns. */
+static struct NotifyRequest wbp_nr, pat_nr;
+static BYTE wbp_sig = -1, pat_sig = -1;
+static int wbp_notify, pat_notify;
+
+static int notify_on(struct NotifyRequest *nr, const char *name, BYTE sig)
+{
+    if (sig < 0) return 0;
+    memset(nr, 0, sizeof *nr);
+    nr->nr_Name = (STRPTR)name;
+    nr->nr_Flags = NRF_SEND_SIGNAL;
+    nr->nr_stuff.nr_Signal.nr_Task = main_task;
+    nr->nr_stuff.nr_Signal.nr_SignalNum = (UBYTE)sig;
+    return StartNotify(nr) != 0;
+}
+
 static int run(void)
 {
-    struct MsgPort *idcmp = NULL, *pub = NULL, *tport = NULL;
+    struct MsgPort *pub = NULL, *tport = NULL;
     struct timerequest *tr = NULL;
-    APTR vi = NULL;
-    struct Menu *menus = NULL;
-    int mode, i, ok = 0, timer = 0;
+    int i, ok = 0, timer = 0, wb_down = 0, nreopen = 0;
 
     main_task = FindTask(NULL);
     if (!(pub = CreateMsgPort())) return RETURN_FAIL;
@@ -1314,55 +1614,20 @@ static int run(void)
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
         goto out;                                  /* ok stays 0: LoadWB */
     }
-    load_theme(&mode);
-    if (!ogt_ctx_init(&ctx, look.scr, &theme, mode) && !ogt_ctx_init(&ctx, look.scr, &theme, OGT_LIGHT)) goto out;
-    look.ctx = &ctx;
-    look.font = ogt_open_font(&theme, look.scr, &ta);
-    look.ta = &ta;
     if (!(idcmp = CreateMsgPort())) goto out;
     look.port = idcmp;
     look.open_object = ob_open_object;
     look.info_object = ob_info_object;
-    count_boards();
-    make_title();
     look.screen_title = screen_title;
-
-    /* the backdrop: the theme's gradient now, the picture when it is decoded */
-    bd_w = look.scr->Width;
-    bd_h = look.scr->Height;
-    backdrop = gradient_backdrop(bd_w, bd_h);
-    backfill_hook.h_Entry = (ULONG (*)())bf_entry;
-    root = OpenWindowTags(NULL, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
-                          WA_Height, look.scr->Height - look.scr->BarHeight - 1, WA_PubScreen, (ULONG)look.scr,
-                          WA_Backdrop, TRUE, WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_BackFill, (ULONG)&backfill_hook,
-                          WA_ReportMouse, TRUE, WA_NewLookMenus, TRUE, WA_Activate, TRUE,
-                          WA_ScreenTitle, (ULONG)screen_title, WA_IDCMP, 0, TAG_DONE);
-    if (!root) goto out;
-    root->UserPort = idcmp;
-    ModifyIDCMP(root, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_REFRESHWINDOW | IDCMP_MENUPICK |
-                      IDCMP_DISKINSERTED | IDCMP_DISKREMOVED);
-    if (look.font) SetFont(root->RPort, look.font);
-    SetDrMd(root->RPort, JAM1);
-    label_h = root->RPort->TxHeight;
-    dri = GetScreenDrawInfo(look.scr);
-    if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(newmenus, TAG_DONE)) &&
-        LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
-        SetMenuStrip(root, menus);
-    scan_volumes();
-    draw_icons();
-    titles_everywhere();
+    wb_prefs_load();
+    if (!desktop_up()) goto out;
     ok = 1;
 
-    /* the picture, decoded in a process of its own */
-    /* the picture: IPrefs' root picture, rendered in a process of its own (0.1.3); ENV:OpenBench/NoPicture: none */
-    if (!Lock_exists("ENV:OpenBench/NoPicture") && root_picture(picture_path, sizeof picture_path) &&
-        (DataTypesBase = OpenLibrary((CONST_STRPTR)"datatypes.library", 44))) {
-        picture_scr = look.scr;
-        picture_busy = 1;
-        if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
-                               NP_Priority, -1, TAG_DONE))
-            picture_busy = 0;
-    }
+    wbp_sig = AllocSignal(-1);
+    pat_sig = AllocSignal(-1);
+    wbp_notify = notify_on(&wbp_nr, "ENV:Sys/Workbench.prefs", wbp_sig);
+    pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", pat_sig);
+    wbc_start();                                   /* OpenLook's close notice */
     start_dock();
     run_wbstartup();
 
@@ -1379,12 +1644,41 @@ static int run(void)
     for (;;) {
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) |
                           (1UL << pub->mp_SigBit) | (dock_sig >= 0 ? 1UL << dock_sig : 0) |
+                          (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
                           SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
         struct Message *lm;
         int quit = 0;
         if (sigs & SIGBREAKF_CTRL_C) break;
-        while ((lm = GetMsg(launch_port))) launch_done((launch *)lm);
+        /* the Workbench screen is being reset: nothing of ours on it, and no lock, until it is back */
+        switch (wbc_take()) {
+        case WBC_CLOSE:
+            if (!wb_down) {
+                nreopen = ndrawers;
+                desktop_down();
+                wb_down = 1;
+            }
+            wbc_closed();
+            break;
+        case WBC_OPEN:
+            if (wb_down) wb_down = 2;               /* a refused reset says "open" too: only when we are down */
+            break;
+        }
+        if (wb_down == 2) {
+            if (desktop_up()) {
+                wb_down = 0;
+                for (i = 0; i < nreopen; i++) {
+                    char path[sizeof drawer_paths[0]];
+                    memcpy(path, drawer_paths[i], sizeof path);   /* open_drawer writes drawer_paths[ndrawers] */
+                    open_drawer(path);
+                }
+                nreopen = 0;
+            } else {
+                desktop_down();                     /* the screen isn't there yet: tried again each tick */
+                wb_down = 2;
+            }
+        }
+        launches_reap();
         while ((lm = GetMsg(pub))) {
             /* something to open, from the dock or another of the Team's programs (obmsg.h) */
             struct ob_msg *om = (struct ob_msg *)lm;
@@ -1394,20 +1688,30 @@ static int run(void)
             }
             ReplyMsg(lm);
         }
+        if (wbp_sig >= 0 && (sigs & (1UL << wbp_sig))) {
+            wb_prefs_load();                        /* a new default stack, devices hidden or shown */
+            if (root) {
+                scan_volumes();
+                redraw_all();
+            }
+        }
+        if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
         if (sigs & (1UL << picture_sig)) {
             ULONG *old = NULL;
+            if (root) LockLayer(0, root->WLayer);
             Forbid();
             if (picture_ready) { old = backdrop; backdrop = picture_ready; picture_ready = NULL; }
             Permit();
+            if (root) UnlockLayer(root->WLayer);
             if (old) FreeVec(old);
-            if (backdrop || pic_bm) {
+            if (root && (backdrop || pic_bm)) {
                 EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
                 draw_icons();
             }
         }
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
-            if (make_title()) titles_everywhere();
+            if (root && make_title()) titles_everywhere();
             tr->tr_time.tv_secs = 2;
             tr->tr_time.tv_micro = 0;
             SendIO((struct IORequest *)tr);
@@ -1419,7 +1723,7 @@ static int run(void)
             APTR ia = im->IAddress;
             WORD mx = im->MouseX, my = im->MouseY;
             GT_ReplyIMsg(im);
-            if (win == root) {
+            if (root && win == root) {
                 if (!root_event(cl, code, qual, mx, my, secs, micros)) quit = 1;
                 continue;
             }
@@ -1438,7 +1742,6 @@ out:
 #ifdef OB_HAVE_TATA
     tata_inspect_end();
 #endif
-    ob_info_quit_all();                         /* and the Information windows' (they close without saving) */
     stop_dock();
     if (timer) {
         AbortIO((struct IORequest *)tr);
@@ -1447,49 +1750,27 @@ out:
     }
     if (tr) DeleteIORequest((struct IORequest *)tr);
     if (tport) DeleteMsgPort(tport);
-    while (ndrawers) close_index(ndrawers - 1);
-    while (picture_busy) Delay(5);                  /* the picture's process is in our code */
-    if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
-    if (root) {
-        ClearMenuStrip(root);
-        {
-            struct IntuiMessage *m;
-            Forbid();
-            while ((m = (struct IntuiMessage *)GetMsg(root->UserPort))) ReplyMsg(&m->ExecMessage);
-            root->UserPort = NULL;
-            ModifyIDCMP(root, 0);
-            Permit();
-        }
-        CloseWindow(root);
-        root = NULL;
-    }
-    if (menus) FreeMenus(menus);
-    if (vi) FreeVisualInfo(vi);
-    if (dri) FreeScreenDrawInfo(look.scr, dri);
-    free_icons();
-    if (backdrop) { FreeVec(backdrop); backdrop = NULL; }
-    if (pic_obj) {
-        pic_bm = NULL;
-        DisposeDTObject(pic_obj);
-        pic_obj = NULL;
-    }
+    if (wbp_notify) EndNotify(&wbp_nr);
+    if (pat_notify) EndNotify(&pat_nr);
+    wbp_notify = pat_notify = 0;
+    if (wbp_sig >= 0) { FreeSignal(wbp_sig); wbp_sig = -1; }
+    if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
+    desktop_down();                             /* the Information windows, the drawers, the root, the screen */
+    wbc_stop();
     if (DataTypesBase) { CloseLibrary(DataTypesBase); DataTypesBase = NULL; }
     if (launch_port) {
-        /* tools still running keep their code until they end: wait for them */
+        /* tools still running keep their code until they end: they are asked to quit, then waited for */
+        if (running && !ask_running_to_quit(5) && run_shell)
+            PutStr((CONST_STRPTR)"OpenBench: waiting for the programs it started to end\n");
         while (running) {
-            struct Message *lm;
             WaitPort(launch_port);
-            while ((lm = GetMsg(launch_port))) launch_done((launch *)lm);
+            launches_reap();
         }
         DeleteMsgPort(launch_port);
     }
     if (picture_sig >= 0) FreeSignal(picture_sig);
     if (dock_sig >= 0) FreeSignal(dock_sig);
     if (idcmp) DeleteMsgPort(idcmp);
-    if (look.font) CloseFont(look.font);
-    if (look.ctx) ogt_ctx_free(&ctx);
-    ogt_theme_free(&theme);
-    if (look.scr) UnlockPubScreen(NULL, look.scr);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
     if (WorkbenchBase) CloseLibrary(WorkbenchBase);
     if (IconBase) CloseLibrary(IconBase);
