@@ -1368,7 +1368,9 @@ static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, st
         sh->w = d->do_Gadget.Width;
         sh->h = d->do_Gadget.Height;
     }
-    frameless = (LONG)GetTagData(ICONDRAWA_Frameless, Base->frameless || (ic && ic->pal[0] && ic->frameless), tags);
+    /* a frame only when nothing says frameless: with 3.2's global setting
+     * on, ICONDRAWA_Frameless FALSE still draws none (R3-2) */
+    frameless = GetTagData(ICONDRAWA_Frameless, FALSE, tags) || Base->frameless || (ic && ic->pal[0] && ic->frameless);
     sh->frame = border && !frameless;
     sh->px = border ? -Base->emboss.MinX : 0;
     sh->py = border ? -Base->emboss.MinY : 0;
@@ -1378,9 +1380,9 @@ static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, st
     if (label) {
         sh->llen = (LONG)slen((const char *)label);
         sh->lw = TextLength(rp, label, (UWORD)sh->llen) + 2;
-        sh->lh = rp->TxHeight + 1;
+        sh->lh = rp->TxHeight + 2;
         sh->lx = (sh->bw - sh->lw) / 2;    /* C's division: -1.5 is -1, as 3.2 */
-        sh->ly = sh->bh;
+        sh->ly = sh->bh - 1;               /* over the box's last row, as 3.2 (R3-2) */
     }
 }
 
@@ -1405,8 +1407,15 @@ static BOOL L_GetIconRectangleA(REG(a0, struct RastPort *rp), REG(a1, struct Dis
     return TRUE;
 }
 
-/* The colour picture, row by row, its see-through colour left out. */
-static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, LONG y)
+/* 3.2's ghost, on the screen's grid: every 4th pixel, shifted 2 a row. */
+static BOOL ghosted(LONG sx, LONG sy)
+{
+    return (sx & 3) == ((sy & 1) ? 3 : 1);
+}
+
+/* The colour picture, row by row, its see-through colour left out; when
+ * disabled, its own pixels (only) ghosted with ghost_pen, as 3.2 (R3-2). */
+static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, LONG y, LONG ghost_pen)
 {
     struct ic_icon *ic = o->icon;
     struct ic_palpic *p = picture_for(ic, k);
@@ -1423,7 +1432,7 @@ static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, 
                 c++;
             start = c;
             while (c < p->width && px[c] != p->transparent) {
-                row[c - start] = pens[px[c]];
+                row[c - start] = ghost_pen >= 0 && ghosted(x + c, y + r) ? (UBYTE)ghost_pen : pens[px[c]];
                 c++;
             }
             if (c > start)
@@ -1436,12 +1445,12 @@ static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, 
 static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
                              REG(d0, LONG x), REG(d1, LONG y), REG(d2, ULONG state), REG(a3, struct TagItem *tags))
 {
-    /* 3.2's ghost, on the screen's grid: every 4th pixel, shifted 2 a row */
-    static const UWORD ghost[2] = { 0x4444, 0x1111 };
+    static const UWORD ghost[2] = { 0x4444, 0x1111 };    /* ghosted()'s, as an area pattern */
     struct DrawInfo *dri = (struct DrawInfo *)GetTagData(ICONDRAWA_DrawInfo, 0, tags);
     BOOL erase = (BOOL)GetTagData(ICONDRAWA_EraseBackground, TRUE, tags);
     struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
     BOOL selected = state == IDS_SELECTED || state == IDS_INACTIVESELECTED;
+    BOOL disabled = state == IDS_DISABLED || state == IDS_SELECTEDDISABLED;
     UWORD pen_bg = dri ? dri->dri_Pens[BACKGROUNDPEN] : 0, pen_shine = dri ? dri->dri_Pens[SHINEPEN] : 2;
     UWORD pen_shadow = dri ? dri->dri_Pens[SHADOWPEN] : 1, pen_text = dri ? dri->dri_Pens[TEXTPEN] : 1;
     UWORD pen_block = dri ? dri->dri_Pens[BLOCKPEN] : 1;
@@ -1478,7 +1487,7 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
         Draw(rp, x, y1);
     }
     if (sh.colour) {
-        draw_colour(rp, o, selected, ix, iy);
+        draw_colour(rp, o, selected, ix, iy, disabled ? (LONG)pen_block : -1);
     } else {
         struct Image *im = (struct Image *)d->do_Gadget.GadgetRender;
         struct Image *sel = (struct Image *)d->do_Gadget.SelectRender;
@@ -1488,9 +1497,13 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
         if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE))
             DrawImage(rp, im, ix, iy);
         if (selected && (high == GFLG_GADGHCOMP || (high == GFLG_GADGHIMAGE && !sel))) {
+            /* only the picture's own planes, as 3.2 (R3-2) */
+            UBYTE mask = rp->Mask;
+            SetWrMsk(rp, im && im->Depth < 8 ? (UBYTE)((1 << im->Depth) - 1) : mask);
             SetDrMd(rp, COMPLEMENT);
             RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
             SetDrMd(rp, JAM1);
+            SetWrMsk(rp, mask);
         } else if (selected && high == GFLG_GADGHBOX) {
             SetDrMd(rp, COMPLEMENT);
             Move(rp, ix - 4, iy - 2);
@@ -1501,7 +1514,7 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
             SetDrMd(rp, JAM1);
         }
     }
-    if (state == IDS_DISABLED || state == IDS_SELECTEDDISABLED) {
+    if (disabled && !sh.colour) {
         SetAPen(rp, pen_block);
         SetAfPt(rp, (UWORD *)ghost, 1);
         RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
