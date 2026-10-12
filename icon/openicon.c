@@ -1497,16 +1497,17 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
         RectFill(rp, x, y, x + sh.bw - 1, y + sh.bh - 1);
     }
     if (sh.frame) {
-        /* raised, or pressed in when selected (not yet measured: 3.2 is frameless by default) */
+        /* raised, or pressed in when selected; the top-right and bottom-left
+         * corners are left alone, as 3.2 (R3-4) */
         LONG x1 = x + sh.bw - 1, y1 = y + sh.bh - 1;
         SetAPen(rp, selected ? pen_shadow : pen_shine);
         Move(rp, x, y1 - 1);
         Draw(rp, x, y);
         Draw(rp, x1 - 1, y);
         SetAPen(rp, selected ? pen_shine : pen_shadow);
-        Move(rp, x1, y);
+        Move(rp, x1, y + 1);
         Draw(rp, x1, y1);
-        Draw(rp, x, y1);
+        Draw(rp, x + 1, y1);
     }
     if (sh.colour) {
         draw_colour(rp, o, selected, ix, iy, disabled ? (LONG)pen_block : -1);
