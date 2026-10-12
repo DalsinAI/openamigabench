@@ -1184,7 +1184,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 run_detached("C:InsertDisk", "Insert Disk couldn't start.\nIt needs C:InsertDisk from AmigaChrome.");
                 break;
             case M_DISK_EJECT:
-                run_detached("C:ACDisk DF0 EJECT QUIET", "DF0 couldn't be ejected.\nIt needs C:ACDisk from AmigaChrome.");
+                run_detached("C:ACDisk DRIVE DF0 EJECT QUIET", "DF0 couldn't be ejected.\nIt needs C:ACDisk from AmigaChrome.");
                 break;
             case M_ICON_OPEN:
             case M_ICON_INFO: {
