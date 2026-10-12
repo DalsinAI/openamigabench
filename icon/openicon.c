@@ -44,6 +44,7 @@
 #include <proto/intuition.h>
 #include <graphics/gfxmacros.h>
 #include <graphics/rastport.h>
+#include <graphics/text.h>
 #include <intuition/imageclass.h>
 #include <intuition/screens.h>
 
@@ -1310,8 +1311,9 @@ static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *
 {
     struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
     struct ic_icon *ic;
+    LONG precision = (LONG)GetTagData(OBP_Precision, (ULONG)Base->precision, tags);
+    BOOL short_of_pens = FALSE;
     int k;
-    (void)tags;
     if (!o)
         return FALSE;
     ic = o->icon;
@@ -1327,14 +1329,19 @@ static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *
         for (i = 0; i < p->ncolours; i++) {
             const UBYTE *c = p->palette + i * 3;
             LONG pen = ObtainBestPen(s->ViewPort.ColorMap, (ULONG)c[0] * 0x01010101UL, (ULONG)c[1] * 0x01010101UL,
-                                     (ULONG)c[2] * 0x01010101UL, OBP_Precision, Base->precision, TAG_DONE);
-            if (pen < 0)
-                pen = 1;            /* none to be had: drawn black, never left out */
-            else
+                                     (ULONG)c[2] * 0x01010101UL, OBP_Precision, precision, TAG_DONE);
+            if (pen < 0) {
+                pen = 1;            /* none to be had: drawn black, never left out, and said */
+                short_of_pens = TRUE;
+            } else
                 o->got[k][i >> 3] |= (UBYTE)(1 << (i & 7));
             o->pens[k][i] = (UBYTE)pen;
         }
         o->npens[k] = p->ncolours;
+    }
+    if (short_of_pens) {
+        SetIoErr(ERROR_NO_FREE_STORE);
+        return FALSE;
     }
     return TRUE;
 }
@@ -1390,20 +1397,26 @@ static BOOL L_GetIconRectangleA(REG(a0, struct RastPort *rp), REG(a1, struct Dis
                                 REG(a3, struct Rectangle *rect), REG(a4, struct TagItem *tags))
 {
     struct shape sh;
-    if (!rp || !d || !rect)
+    LONG minx, maxx, maxy;
+    if (!d || !rect || (label && !rp))   /* a RastPort only to measure a label */
         return FALSE;
     shape_of(rp, d, label, tags, &sh);
-    rect->MinX = 0;
-    rect->MinY = 0;
-    rect->MaxX = (WORD)(sh.bw - 1);
-    rect->MaxY = (WORD)(sh.bh - 1);
+    minx = 0;
+    maxx = sh.bw - 1;
+    maxy = sh.bh - 1;
     if (label) {
-        if (sh.lx < rect->MinX)
-            rect->MinX = (WORD)sh.lx;
-        if (sh.lx + sh.lw - 1 > rect->MaxX)
-            rect->MaxX = (WORD)(sh.lx + sh.lw - 1);
-        rect->MaxY = (WORD)(sh.ly + sh.lh);     /* one row more than is drawn, as 3.2 */
+        if (sh.lx < minx)
+            minx = sh.lx;
+        if (sh.lx + sh.lw - 1 > maxx)
+            maxx = sh.lx + sh.lw - 1;
+        maxy = sh.ly + sh.lh;           /* one row more than is drawn, as 3.2 */
     }
+    if (minx < -32768 || maxx > 32767 || maxy > 32767)
+        return FALSE;                   /* doesn't fit a Rectangle's WORDs */
+    rect->MinX = (WORD)minx;
+    rect->MinY = 0;
+    rect->MaxX = (WORD)maxx;
+    rect->MaxY = (WORD)maxy;
     return TRUE;
 }
 
@@ -1420,26 +1433,23 @@ static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, 
     struct ic_icon *ic = o->icon;
     struct ic_palpic *p = picture_for(ic, k);
     const UBYTE *pens = o->pens[k];    /* the second's are the darkened palette's when it has none */
-    UBYTE *row = AllocVec(p->width, MEMF_ANY);
-    LONG r, c;
-    if (!row)
-        return;
+    UBYTE row[256];                 /* an IMAG picture is at most 256 wide */
+    LONG r, c, w = p->width < 256 ? p->width : 256;
     for (r = 0; r < p->height; r++) {
         const UBYTE *px = p->pixels + r * p->width;
-        for (c = 0; c < p->width;) {
+        for (c = 0; c < w;) {
             LONG start;
-            while (c < p->width && px[c] == p->transparent)
+            while (c < w && px[c] == p->transparent)
                 c++;
             start = c;
-            while (c < p->width && px[c] != p->transparent) {
+            while (c < w && px[c] != p->transparent) {
                 row[c - start] = ghost_pen >= 0 && ghosted(x + c, y + r) ? (UBYTE)ghost_pen : pens[px[c]];
                 c++;
             }
             if (c > start)
-                WriteChunkyPixels(rp, x + start, y + r, x + c - 1, y + r, row, p->width);
+                WriteChunkyPixels(rp, x + start, y + r, x + c - 1, y + r, row, sizeof row);
         }
     }
-    FreeVec(row);
 }
 
 static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
@@ -1449,11 +1459,10 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     struct DrawInfo *dri = (struct DrawInfo *)GetTagData(ICONDRAWA_DrawInfo, 0, tags);
     BOOL erase = (BOOL)GetTagData(ICONDRAWA_EraseBackground, TRUE, tags);
     struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
-    BOOL selected = state == IDS_SELECTED || state == IDS_INACTIVESELECTED;
-    BOOL disabled = state == IDS_DISABLED || state == IDS_SELECTEDDISABLED;
-    UWORD pen_bg = dri ? dri->dri_Pens[BACKGROUNDPEN] : 0, pen_shine = dri ? dri->dri_Pens[SHINEPEN] : 2;
-    UWORD pen_shadow = dri ? dri->dri_Pens[SHADOWPEN] : 1, pen_text = dri ? dri->dri_Pens[TEXTPEN] : 1;
-    UWORD pen_block = dri ? dri->dri_Pens[BLOCKPEN] : 1;
+    BOOL selected = state == IDS_SELECTED || state == IDS_INACTIVESELECTED || state == IDS_SELECTEDDISABLED;
+    BOOL disabled = state == IDS_DISABLED || state == IDS_SELECTEDDISABLED || state == IDS_INACTIVEDISABLED;
+    struct DrawInfo *own = NULL;
+    UWORD pen_bg, pen_shine, pen_shadow, pen_block;
     struct shape sh;
     ULONG apen, bpen, drmd;
     UWORD *afpt;
@@ -1461,6 +1470,13 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     LONG ix, iy;
     if (!rp || !d)
         return;
+    /* no DrawInfo: the global screen's (ICONCTRLA_SetGlobalScreen), else 3.x's pens */
+    if (!dri && Base->screen)
+        dri = own = GetScreenDrawInfo(Base->screen);
+    pen_bg = dri ? dri->dri_Pens[BACKGROUNDPEN] : 0;
+    pen_shine = dri ? dri->dri_Pens[SHINEPEN] : 2;
+    pen_shadow = dri ? dri->dri_Pens[SHADOWPEN] : 1;
+    pen_block = dri ? dri->dri_Pens[BLOCKPEN] : 1;
     shape_of(rp, d, label, tags, &sh);
     ix = x + sh.px;
     iy = y + sh.py;
@@ -1494,23 +1510,29 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
         UWORD high = d->do_Gadget.Flags & GFLG_GADGHIGHBITS;
         if (selected && high == GFLG_GADGHIMAGE && sel)
             im = sel;
-        if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE))
+        if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE)) {
             DrawImage(rp, im, ix, iy);
+            ix += im->LeftEdge;     /* where DrawImage put it, for the effects below */
+            iy += im->TopEdge;
+        }
         if (selected && (high == GFLG_GADGHCOMP || (high == GFLG_GADGHIMAGE && !sel))) {
-            /* only the picture's own planes, as 3.2 (R3-2) */
+            /* only the planes the picture is drawn in, as 3.2 (R3-2) */
             UBYTE mask = rp->Mask;
-            SetWrMsk(rp, im && im->Depth < 8 ? (UBYTE)((1 << im->Depth) - 1) : mask);
+            if (im)
+                SetWrMsk(rp, im->PlanePick ? im->PlanePick : (UBYTE)(im->Depth < 8 ? (1 << im->Depth) - 1 : 0xFF));
             SetDrMd(rp, COMPLEMENT);
             RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
             SetDrMd(rp, JAM1);
             SetWrMsk(rp, mask);
         } else if (selected && high == GFLG_GADGHBOX) {
+            /* the box round it, on the icon box's edge, so inside GetIconRectangleA's */
+            LONG x1 = x + sh.bw - 1, y1 = y + sh.bh - 1;
             SetDrMd(rp, COMPLEMENT);
-            Move(rp, ix - 4, iy - 2);
-            Draw(rp, ix + sh.w + 3, iy - 2);
-            Draw(rp, ix + sh.w + 3, iy + sh.h + 1);
-            Draw(rp, ix - 4, iy + sh.h + 1);
-            Draw(rp, ix - 4, iy - 2);
+            Move(rp, x, y);
+            Draw(rp, x1, y);
+            Draw(rp, x1, y1);
+            Draw(rp, x, y1);
+            Draw(rp, x, y + 1);
             SetDrMd(rp, JAM1);
         }
     }
@@ -1526,13 +1548,26 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
             SetAPen(rp, pen_bg);
             RectFill(rp, lx, ly, lx + sh.lw - 1, ly + sh.lh - 1);
         }
-        SetAPen(rp, pen_text);
+        /* the text in the caller's pens and mode */
+        SetAPen(rp, apen);
+        SetBPen(rp, bpen);
+        SetDrMd(rp, drmd);
         Move(rp, lx + 1, ly + 1 + rp->TxBaseline);
-        Text(rp, label, (UWORD)sh.llen);
+#ifdef ICONDRAWA_IsLink
+        if (GetTagData(ICONDRAWA_IsLink, FALSE, tags)) {
+            ULONG style = rp->AlgoStyle;
+            SetSoftStyle(rp, FSF_UNDERLINED, FSF_UNDERLINED);
+            Text(rp, label, (UWORD)sh.llen);
+            SetSoftStyle(rp, style, FSF_UNDERLINED);
+        } else
+#endif
+            Text(rp, label, (UWORD)sh.llen);
     }
     SetAPen(rp, apen);
     SetBPen(rp, bpen);
     SetDrMd(rp, drmd);
+    if (own)
+        FreeScreenDrawInfo(Base->screen, own);
 }
 
 /* OS 3.2's sum (iconprobe at 0000c5c): each gun 40 darker, down to 0. */
