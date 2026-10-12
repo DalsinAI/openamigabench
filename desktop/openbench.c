@@ -34,12 +34,15 @@
  *   - quitting (0.1.19): programs started from OpenBench (OpenMeters from SYS:WBStartup, say) are asked to quit
  *     with Ctrl-C, which they answer, as their code is OpenBench's to unload; before, quitting waited for them
  *     for ever;
- *   - Intuition's Workbench (0.1.20, the native screen mode's step 4): OpenBench gives Intuition its port
+ *   - picture thumbnails and icon sizes in the drawers (0.1.20, 0.1.21; Dale, 12 October 2026: "using datatypes to
+ *     display picture thumbnails and variable size icons", the mockup approved the same evening): OpenDrawer's
+ *     (opengadtools workbench/wb_thumb.c), its process started here and stopped before OpenBench ends;
+ *   - Intuition's Workbench (0.1.22, the native screen mode's step 4): OpenBench gives Intuition its port
  *     (AlohaWorkbench) and marks its windows as the Workbench's, so CloseWorkBench() asks it to close them
  *     (WBENCHCLOSE) and OpenWorkBench() says the screen is back (WBENCHOPEN), with or without OpenLook's close
  *     notice. Its drawers come back where they were, moved in if they would now fall off the screen, and the
  *     backdrop is made for the new size. ScreenMode prefs' Use takes effect without a reboot;
- *   - Resize to Window (0.1.20): on a Native mode (openrtg.library 0.17), OpenBench > Resize to Window reopens
+ *   - Resize to Window (0.1.22): on a Native mode (openrtg.library 0.17), OpenBench > Resize to Window reopens
  *     the Workbench screen at the size the host's window asks for, and the 2-second timer does it when a page
  *     asks the Amiga to follow now (openrtg's ASK). Another program's window blocks it, as it blocks any
  *     reset: a requester names them, with Try Again and Cancel;
@@ -114,11 +117,13 @@
 #endif
 #include "wb_drawer.h"
 #include "wb_dir.h"
+#include "wb_thumb.h"
+#include "wb_pic.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.20"
+#define OPENBENCH_VERSION "0.1.22"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -1179,7 +1184,7 @@ static void titles_everywhere(void)
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
        M_RESIZE };
 
-/* 0.1.20: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
+/* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
 #define RESIZE_INDEX 4
 #define RESIZE_ITEM 3
@@ -1206,7 +1211,7 @@ static struct NewMenu newmenus[] = {
 };
 
 static void resize_to_window(void);
-static int want_resize;                     /* 0.1.20: Resize to Window picked: done once the messages are read */
+static int want_resize;                     /* 0.1.22: Resize to Window picked: done once the messages are read */
 
 static int ask(const char *title, const char *text, const char *gadgets)
 {
@@ -1394,7 +1399,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
     case IDCMP_MENUPICK: {
         UWORD num = code;
         int picked = 0;
-        /* 0.1.20: at most as many items as the menus have; an item's NextSelect is only set when it is picked
+        /* 0.1.22: at most as many items as the menus have; an item's NextSelect is only set when it is picked
          * from the menus, and one left at 0 (menu 0, item 0) would loop for ever */
         while (num != MENUNULL && picked++ < 32) {
             struct MenuItem *it = ItemAddress(root->MenuStrip, num);
@@ -1481,7 +1486,7 @@ static int run_shell;
 static struct MsgPort *idcmp;
 static APTR vi;
 static struct Menu *menus;
-static int resize_shown, resize_greyed;     /* 0.1.20: Resize to Window in the menu, and greyed */
+static int resize_shown, resize_greyed;     /* 0.1.22: Resize to Window in the menu, and greyed */
 
 /* The picture, decoded in a process of its own (0.1.3): IPrefs' root picture; ENV:OpenBench/NoPicture, none. */
 static void start_picture(void)
@@ -1585,7 +1590,7 @@ static int desktop_up(void)
     bd_h = look.scr->Height;
     backdrop = gradient_backdrop(bd_w, bd_h);
     backfill_hook.h_Entry = (ULONG (*)())bf_entry;
-    /* 0.1.20: a Workbench window (WFLG_WBENCHWINDOW, first: the other tags add to it), as all of OpenBench's
+    /* 0.1.22: a Workbench window (WFLG_WBENCHWINDOW, first: the other tags add to it), as all of OpenBench's
      * are (mark_ours), so CloseWorkBench() asks OpenBench to close it instead of refusing at once */
     root = OpenWindowTags(NULL, WA_Flags, WFLG_WBENCHWINDOW, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
                           WA_Height, look.scr->Height - look.scr->BarHeight - 1, WA_PubScreen, (ULONG)look.scr,
@@ -1620,7 +1625,7 @@ static int desktop_up(void)
     return 1;
 }
 
-/* ---- Intuition's Workbench, and Resize to Window (0.1.20, the native screen mode's step 4) -------------- *
+/* ---- Intuition's Workbench, and Resize to Window (0.1.22, the native screen mode's step 4) -------------- *
  * Measured on OS 3.2.3 (lab backlog, 12 October 2026, tools/alohaprobe): CloseWorkBench() refuses at once,
  * telling the Workbench nothing, while the screen has a window that isn't the Workbench's (one without
  * WFLG_WBENCHWINDOW). Otherwise it sends the registered Workbench port WBENCHCLOSE, waits for the answer and
@@ -1867,7 +1872,7 @@ static void resize_to_window(void)
     start_reset();
 }
 
-/* The 2-second timer (0.1.20): a page asked the Amiga to follow now (ASK moved): Resize to Window. And the
+/* The 2-second timer (0.1.22): a page asked the Amiga to follow now (ASK moved): Resize to Window. And the
  * menu item greyed or not as the sizes match or not. */
 static void native_tick(void)
 {
@@ -1965,6 +1970,9 @@ static int run(void)
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 44);
     WorkbenchBase = OpenLibrary((CONST_STRPTR)"workbench.library", 44);
     CyberGfxBase = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 40);
+    /* OpenDrawer's pictures (the list's small icons, sizes, thumbnails) are written with cybergraphics,
+     * which wb_pic opens for itself: 0.1.20, which never opened it, drew them all as icons (Instance-32) */
+    wb_pic_open();
     if (!IconBase) goto out;
     if (!(launch_port = CreateMsgPort())) goto out;
     if ((picture_sig = AllocSignal(-1)) < 0) goto out;
@@ -1980,7 +1988,7 @@ static int run(void)
     look.info_object = ob_info_object;
     look.screen_title = screen_title;
     wb_prefs_load();
-    aloha_start();                                 /* 0.1.20: Intuition's Workbench port, openrtg.library 0.17 */
+    aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */
     if (!desktop_up()) goto out;
     ok = 1;
 
@@ -2002,8 +2010,9 @@ static int run(void)
         SendIO((struct IORequest *)tr);
     }
 
+    wb_thumb_start();                           /* the drawers' thumbnails (0.2); none: pictures show their icons */
     for (;;) {
-        ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) |
+        ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
                           (1UL << pub->mp_SigBit) | (dock_sig >= 0 ? 1UL << dock_sig : 0) |
                           (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
@@ -2025,7 +2034,7 @@ static int run(void)
             if (wb_down) wb_down = 2;               /* a refused reset says "open" too: only when we are down */
             break;
         }
-        /* 0.1.20: Intuition's own word, as the Workbench (AlohaWorkbench): WBENCHCLOSE before the screen closes
+        /* 0.1.22: Intuition's own word, as the Workbench (AlohaWorkbench): WBENCHCLOSE before the screen closes
          * (everything closed, then answered), WBENCHOPEN when it is back or the close was refused (answered,
          * then opened again) */
         if (aloha_port) {
@@ -2041,7 +2050,7 @@ static int run(void)
                 if (cl == IDCMP_WBENCHMESSAGE && code == WBENCHOPEN && wb_down) wb_down = 2;
             }
         }
-        /* 0.1.20: Resize to Window's process is back: a refusal at once sends no WBENCHOPEN, so up again here */
+        /* 0.1.22: Resize to Window's process is back: a refusal at once sends no WBENCHOPEN, so up again here */
         if (reset_sig >= 0 && (sigs & (1UL << reset_sig)) && !reset_busy) {
             if (wb_down) wb_down = 2;
             if (!reset_closed) reset_refused = 1;
@@ -2083,6 +2092,8 @@ static int run(void)
             }
         }
         if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
+        if ((sigs & wb_thumb_sigmask()) && wb_thumb_collect())
+            for (i = 0; i < ndrawers; i++) wb_drawer_thumbs(drawers[i]);
         if (sigs & (1UL << picture_sig)) {
             ULONG *old = NULL;
             if (root) LockLayer(0, root->WLayer);
@@ -2099,8 +2110,8 @@ static int run(void)
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
             if (root && make_title()) titles_everywhere();
-            if (root) mark_ours();                  /* 0.1.20: the dock's and Information windows opened since */
-            if (!wb_down) native_tick();            /* 0.1.20: a page asked the Amiga to follow now; the menu item */
+            if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
+            if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
             tr->tr_time.tv_secs = 2;
             tr->tr_time.tv_micro = 0;
             SendIO((struct IORequest *)tr);
@@ -2131,7 +2142,7 @@ static int run(void)
     }
 
 out:
-    aloha_stop();                               /* 0.1.20: Intuition's Workbench port given back first */
+    aloha_stop();                               /* 0.1.22: Intuition's Workbench port given back first */
     ob_builtin_quit_all();                      /* the built-ins first: their code is ours */
 #ifdef OB_HAVE_TATA
     tata_inspect_end();
@@ -2151,6 +2162,8 @@ out:
     if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
     desktop_down();                             /* the Information windows, the drawers, the root, the screen */
     wbc_stop();
+    wb_thumb_stop();                            /* its process runs our code, and uses datatypes.library */
+    wb_pic_close();
     if (DataTypesBase) { CloseLibrary(DataTypesBase); DataTypesBase = NULL; }
     if (launch_port) {
         /* tools still running keep their code until they end: they are asked to quit, then waited for */

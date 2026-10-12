@@ -8,7 +8,7 @@
  *                         CloseWorkBench() and then OpenWorkBench(), and lists in order every message Intuition
  *                         sends, each call's result, and whether the screen was there at each step; then gives
  *                         Intuition's Workbench port back (AlohaWorkbench(NULL)). Only where no Workbench is
- *                         registered: not with LoadWB's Workbench, nor an OpenBench from 0.1.20 on
+ *                         registered: not with LoadWB's Workbench, nor an OpenBench from 0.1.22 on
  *   alohaprobe RESET      CloseWorkBench() and then OpenWorkBench() from the Shell, as IPrefs does for a new
  *                         screen mode, and their results
  *   ... WAIT n            seconds PROBE waits for each call (20): a call stuck in a requester is reported

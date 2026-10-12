@@ -20,7 +20,7 @@ Both libraries exist as **proxies**. Each one forwards every call to Hyperion's 
 | `icon/iconlib.c` | `icon.library`, version 47.5 like 3.2.3's. Its 30 entries are forwarded |
 | `proxy/` | What both share: loading the original under a private name (`OpenUp.original.workbench.library`, for example), the forwarding stubs, and the spy |
 | `tools/wbspy` | Records every call into both libraries in a lab: the calling program, the registers, any name or tag list, and the result. It saves one line per call, both libraries merged in the order the calls were made (by the EClock). Its log is the contract for the private entries (`StartWorkbench`, `WBConfig`, `QuoteWorkbench`) |
-| `tools/alohaprobe` | For a lab only. `INFO` lists the Workbench screen (size, ModeID), its windows and free memory. `PROBE` registers as the Workbench (`AlohaWorkbench`) where none is, calls `CloseWorkBench()` and `OpenWorkBench()`, and lists every message Intuition sends and when. It is how OpenBench 0.1.20's Resize to Window was checked on OS 3.2.3 |
+| `tools/alohaprobe` | For a lab only. `INFO` lists the Workbench screen (size, ModeID), its windows and free memory. `PROBE` registers as the Workbench (`AlohaWorkbench`) where none is, calls `CloseWorkBench()` and `OpenWorkBench()`, and lists every message Intuition sends and when. It is how OpenBench 0.1.22's Resize to Window was checked on OS 3.2.3 |
 | `lab/Install-R1`, `lab/Uninstall-R1` | Put our libraries in a lab instance with Hyperion's kept aside, and put Hyperion's back |
 
 Nothing here has been run on an Amiga yet. It is for **lab instances only** until the oracle runs in the design's §7 pass. OpenBench needs AmigaOS 3.2 and a 68020 or better (the design's §6). Both the libraries and `Install-R1` refuse anything older.
