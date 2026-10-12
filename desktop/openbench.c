@@ -5,7 +5,8 @@
  *   - the root window, a backdrop on the Workbench screen: IPrefs' root picture (ENV:Sys/WBPattern.prefs),
  *     rendered the way IPrefs renders it for Workbench, in a process of its own so the desktop shows at
  *     once, centred over the theme's desktop gradient; the mounted volumes on it, down the left, at the
- *     places their Disk.info keep;
+ *     places their Disk.info keep (a volume without one gets the default icon for its kind of drive, 0.1.17:
+ *     def_Harddisk for a hard disk such as a new instance's Work:, which showed as a floppy before);
  *   - drawers, in the drawer windows approved and built as OpenDrawer (opengadtools workbench/wb_drawer);
  *   - starting things as Workbench starts them: a tool with LoadSeg and a WBStartup message, a project
  *     through its default tool, a drawer or disk in a drawer window; SYS:WBStartup at the start;
@@ -51,6 +52,7 @@
 #include <dos/dos.h>
 #include <dos/dosextens.h>
 #include <dos/dostags.h>
+#include <dos/filehandler.h>
 #include <devices/timer.h>
 #include <devices/input.h>
 #include <devices/inputevent.h>
@@ -94,7 +96,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.16"
+#define OPENBENCH_VERSION "0.1.17"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -534,6 +536,7 @@ static void picture_entry(void)
 typedef struct dicon {
     char name[64];                          /* the volume's name, the label */
     char path[72];                          /* "Work:" */
+    const char *kind;                       /* its drive's default icon, def_<kind>, when it has no Disk.info */
     struct DiskObject *dobj;
     LONG x, y, w, h;                        /* the picture's box in the root window */
     LONG ix, iy;                            /* where DrawIconState puts it for that box */
@@ -655,15 +658,50 @@ static int by_name(const void *a, const void *b)
     return ci_cmp(((const dicon *)a)->name, ((const dicon *)b)->name);
 }
 
-/* The mounted volumes, their Disk.info (a default disk icon where there is none), placed where their
- * icons say, the rest down the left. */
+/* 1 when the BCPL name b is s, case aside (s in lower case); or starts with s when prefix is set. */
+static int bname_is(const UBYTE *b, const char *s, int prefix)
+{
+    int i, n = (int)strlen(s);
+    if (!b || b[0] < n || (!prefix && b[0] != n)) return 0;
+    for (i = 0; i < n; i++)
+        if ((b[1 + i] | 0x20) != s[i]) return 0;
+    return 1;
+}
+
+/* The kind of drive a volume is in, for its icon when it has no Disk.info: Workbench's default icon
+ * names, def_<kind>. A floppy is "Disk", the RAM disk "RAM", a CD "CDROM", and every other drive a hard
+ * disk, "Harddisk". 0.1.17: a volume without a Disk.info was given icon.library's default disk icon, which
+ * is a floppy, so a hard disk partition (Work: on a new instance, which has no Disk.info) showed as a
+ * floppy. Called with the DOS list locked for volumes and devices; start is what LockDosList gave. */
+static const char *drive_kind(struct DosList *start, const struct DosList *vol)
+{
+    struct DosList *d = start;
+    while ((d = NextDosEntry(d, LDF_DEVICES))) {
+        const UBYTE *n = (const UBYTE *)BADDR(d->dol_Name);
+        ULONG su = (ULONG)d->dol_misc.dol_handler.dol_Startup;
+        if (d->dol_Task != vol->dol_Task) continue;
+        if (bname_is(n, "ram", 0)) return "RAM";
+        if (bname_is(n, "cd", 1)) return "CDROM";
+        if (bname_is(n, "df", 1)) return "Disk";
+        if (su > 1024 && !(su & 0xC0000000UL)) {     /* a FileSysStartupMsg, not a number some handlers keep there */
+            const struct FileSysStartupMsg *fssm = (const struct FileSysStartupMsg *)BADDR(su);
+            const UBYTE *dev = (const UBYTE *)BADDR(fssm->fssm_Device);
+            if (bname_is(dev, "trackdisk.device", 0) || bname_is(dev, "mfm.device", 0)) return "Disk";
+        }
+        break;
+    }
+    return "Harddisk";
+}
+
+/* The mounted volumes, their Disk.info (where there is none, the default icon for their kind of drive),
+ * placed where their icons say, the rest down the left. */
 static void scan_volumes(void)
 {
-    struct DosList *dl;
+    struct DosList *dl, *start;
     LONG next_y = 12;
     int i;
     free_icons();
-    dl = LockDosList(LDF_VOLUMES | LDF_READ);
+    dl = start = LockDosList(LDF_VOLUMES | LDF_DEVICES | LDF_READ);
     while ((dl = NextDosEntry(dl, LDF_VOLUMES)) && nicons < MAX_VOLUMES) {
         UBYTE *b = (UBYTE *)BADDR(dl->dol_Name);
         int n;
@@ -671,9 +709,10 @@ static void scan_volumes(void)
         n = b[0] < 63 ? b[0] : 63;
         memcpy(icons[nicons].name, b + 1, (size_t)n);
         icons[nicons].name[n] = 0;
+        icons[nicons].kind = drive_kind(start, dl);
         nicons++;
     }
-    UnLockDosList(LDF_VOLUMES | LDF_READ);
+    UnLockDosList(LDF_VOLUMES | LDF_DEVICES | LDF_READ);
     qsort(icons, (size_t)nicons, sizeof icons[0], by_name);
     for (i = 0; i < nicons; i++) {
         dicon *ic = &icons[i];
@@ -682,7 +721,10 @@ static void scan_volumes(void)
         snprintf(ic->path, sizeof ic->path, "%s:", ic->name);
         snprintf(ip, sizeof ip, "%s:Disk", ic->name);
         ic->selected = 0;
-        ic->dobj = GetIconTags((CONST_STRPTR)ip, ICONGETA_FailIfUnavailable, FALSE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        ic->dobj = GetIconTags((CONST_STRPTR)ip, ICONGETA_FailIfUnavailable, TRUE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        if (!ic->dobj)                              /* no Disk.info: def_<kind>, or the default disk icon */
+            ic->dobj = GetIconTags(NULL, ICONGETA_GetDefaultName, (ULONG)ic->kind, ICONGETA_GetDefaultType, WBDISK,
+                                   ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
         ic->w = 48; ic->h = 40;
         r.MinX = r.MinY = 0;
         if (ic->dobj && GetIconRectangle(root->RPort, ic->dobj, NULL, &r, ICONDRAWA_Borderless, TRUE, TAG_DONE)) {
