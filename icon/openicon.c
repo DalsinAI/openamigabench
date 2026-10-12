@@ -1462,6 +1462,7 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     BOOL selected = state == IDS_SELECTED || state == IDS_INACTIVESELECTED || state == IDS_SELECTEDDISABLED;
     BOOL disabled = state == IDS_DISABLED || state == IDS_SELECTEDDISABLED || state == IDS_INACTIVEDISABLED;
     struct DrawInfo *own = NULL;
+    struct Screen *own_screen = NULL;
     UWORD pen_bg, pen_shine, pen_shadow, pen_block;
     struct shape sh;
     ULONG apen, bpen, drmd;
@@ -1471,8 +1472,13 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     if (!rp || !d)
         return;
     /* no DrawInfo: the global screen's (ICONCTRLA_SetGlobalScreen), else 3.x's pens */
-    if (!dri && Base->screen)
-        dri = own = GetScreenDrawInfo(Base->screen);
+    if (!dri) {
+        ObtainSemaphoreShared(&Base->lock);
+        own_screen = Base->screen;
+        if (own_screen)
+            dri = own = GetScreenDrawInfo(own_screen);
+        ReleaseSemaphore(&Base->lock);
+    }
     pen_bg = dri ? dri->dri_Pens[BACKGROUNDPEN] : 0;
     pen_shine = dri ? dri->dri_Pens[SHINEPEN] : 2;
     pen_shadow = dri ? dri->dri_Pens[SHADOWPEN] : 1;
@@ -1514,12 +1520,15 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
             DrawImage(rp, im, ix, iy);
             ix += im->LeftEdge;     /* where DrawImage put it, for the effects below */
             iy += im->TopEdge;
+            sh.w = im->Width;       /* and the size of the image drawn, the select one's too */
+            sh.h = im->Height;
         }
         if (selected && (high == GFLG_GADGHCOMP || (high == GFLG_GADGHIMAGE && !sel))) {
             /* only the planes the picture is drawn in, as 3.2 (R3-2) */
             UBYTE mask = rp->Mask;
             if (im)
-                SetWrMsk(rp, im->PlanePick ? im->PlanePick : (UBYTE)(im->Depth < 8 ? (1 << im->Depth) - 1 : 0xFF));
+                SetWrMsk(rp, mask & (im->PlanePick ? im->PlanePick
+                                                   : (UBYTE)(im->Depth < 8 ? (1 << im->Depth) - 1 : 0xFF)));
             SetDrMd(rp, COMPLEMENT);
             RectFill(rp, ix, iy, ix + sh.w - 1, iy + sh.h - 1);
             SetDrMd(rp, JAM1);
@@ -1567,7 +1576,7 @@ static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     SetBPen(rp, bpen);
     SetDrMd(rp, drmd);
     if (own)
-        FreeScreenDrawInfo(Base->screen, own);
+        FreeScreenDrawInfo(own_screen, own);
 }
 
 /* OS 3.2's sum (iconprobe at 0000c5c): each gun 40 darker, down to 0. */
