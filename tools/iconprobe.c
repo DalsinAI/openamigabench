@@ -396,7 +396,8 @@ static void free_lists(void)
         int i;
         IconBase = lib ? our_base : os_base;
         memset(&fl, 0, sizeof fl);
-        NewList(&fl.fl_MemList);
+        fl.fl_MemList.lh_Head = (struct Node *)&fl.fl_MemList.lh_Tail;   /* an empty list */
+        fl.fl_MemList.lh_TailPred = (struct Node *)&fl.fl_MemList.lh_Head;
         for (i = 0; i < 3; i++)
             FreeAlloc(&fl, 32, MEMF_PUBLIC);
         counts[lib][0] = fl.fl_NumFree;

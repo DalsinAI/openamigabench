@@ -1214,7 +1214,9 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
         return NULL;
     }
     InitSemaphore(&b->lock);
-    NewList((struct List *)&b->objects);
+    b->objects.mlh_Head = (struct MinNode *)&b->objects.mlh_Tail;   /* an empty list */
+    b->objects.mlh_Tail = NULL;
+    b->objects.mlh_TailPred = (struct MinNode *)&b->objects.mlh_Head;
     b->precision = PRECISION_ICON;
     b->frameless = FALSE;
     b->newicons = TRUE;
