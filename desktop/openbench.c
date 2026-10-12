@@ -37,6 +37,15 @@
  *   - picture thumbnails and icon sizes in the drawers (0.1.20, 0.1.21; Dale, 12 October 2026: "using datatypes to
  *     display picture thumbnails and variable size icons", the mockup approved the same evening): OpenDrawer's
  *     (opengadtools workbench/wb_thumb.c), its process started here and stopped before OpenBench ends;
+ *   - Intuition's Workbench (0.1.22, the native screen mode's step 4): OpenBench gives Intuition its port
+ *     (AlohaWorkbench) and marks its windows as the Workbench's, so CloseWorkBench() asks it to close them
+ *     (WBENCHCLOSE) and OpenWorkBench() says the screen is back (WBENCHOPEN), with or without OpenLook's close
+ *     notice. Its drawers come back where they were, moved in if they would now fall off the screen, and the
+ *     backdrop is made for the new size. ScreenMode prefs' Use takes effect without a reboot;
+ *   - Resize to Window (0.1.22): on a Native mode (openrtg.library 0.17), OpenBench > Resize to Window reopens
+ *     the Workbench screen at the size the host's window asks for, and the 2-second timer does it when a page
+ *     asks the Amiga to follow now (openrtg's ASK). Another program's window blocks it, as it blocks any
+ *     reset: a requester names them, with Try Again and Cancel;
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -114,7 +123,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.21"
+#define OPENBENCH_VERSION "0.1.22"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -130,6 +139,19 @@ static struct Library *CyberGfxBase;
 #define CGX_MAPATTR(bm, a) LP2(0x60, ULONG, GetCyberMapAttr, struct BitMap *, (bm), a0, ULONG, (a), d0, , CyberGfxBase)
 #define CYBRMATTR_DEPTH 0x80000007UL
 #define CYBRMATTR_ISCYBERGFX 0x80000008UL
+
+/* openrtg.library 0.17 (openamigartg include/openrtg/openrtg.h): the size the host's window asks for, read through
+ * OpenRTG (OpenBench never reads a board itself), and the Native modes' ModeIDs (place 0x22 of OpenRTG's table) */
+struct ob_native_size {
+    UWORD width, height;                    /* asked for; 0 x 0 when nothing is */
+    ULONG gen;                              /* up by one at each new size */
+    ULONG ask;                              /* up by one each time a page asks the Amiga to follow now */
+    UWORD limit_width, limit_height;        /* the board's largest picture */
+    ULONG mode_id;
+};
+#define ORTG_NATIVESIZE(base, monitor, out) \
+    LP2(0x7e, BOOL, ORTG_NativeSize, ULONG, (monitor), d0, struct ob_native_size *, (out), a0, , (base))
+#define OB_IS_NATIVE(id) ((((id) >> 16) & 0xFFUL) == 0x22 && ((id) & 0x1000UL) && ((id) >> 28) == 6)
 
 /* The windows run on 32 KB, however OpenBench is started (Run in the Startup-Sequence gives the boot
  * Shell's stack): libnix's __stack where its swap works, else a process of our own (as OpenDrawer). */
@@ -1159,13 +1181,19 @@ static void titles_everywhere(void)
 
 /* ---- menus ---------------------------------------------------------------------------------- */
 
-enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT };
+enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
+       M_RESIZE };
 
+/* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
+ * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
+#define RESIZE_INDEX 4
+#define RESIZE_ITEM 3
 static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"OpenBench", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"New Shell", (STRPTR)"N", 0, 0, (APTR)M_SHELL },
     { NM_ITEM, (STRPTR)"Redraw All", NULL, 0, 0, (APTR)M_REDRAW },
     { NM_ITEM, (STRPTR)"Update", NULL, 0, 0, (APTR)M_UPDATE },
+    { NM_ITEM, (STRPTR)"Resize to Window", NULL, 0, 0, (APTR)M_RESIZE },
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"About...", (STRPTR)"?", 0, 0, (APTR)M_ABOUT },
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
@@ -1181,6 +1209,9 @@ static struct NewMenu newmenus[] = {
     { NM_ITEM, (STRPTR)"Eject DF0", NULL, 0, 0, (APTR)M_DISK_EJECT },
     { NM_END, NULL, NULL, 0, 0, NULL }
 };
+
+static void resize_to_window(void);
+static int want_resize;                     /* 0.1.22: Resize to Window picked: done once the messages are read */
 
 static int ask(const char *title, const char *text, const char *gadgets)
 {
@@ -1367,7 +1398,10 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
         break;
     case IDCMP_MENUPICK: {
         UWORD num = code;
-        while (num != MENUNULL) {
+        int picked = 0;
+        /* 0.1.22: at most as many items as the menus have; an item's NextSelect is only set when it is picked
+         * from the menus, and one left at 0 (menu 0, item 0) would loop for ever */
+        while (num != MENUNULL && picked++ < 32) {
             struct MenuItem *it = ItemAddress(root->MenuStrip, num);
             ULONG id = it ? (ULONG)GTMENUITEM_USERDATA(it) : 0;
             switch (id) {
@@ -1389,6 +1423,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 break;
             }
             case M_REDRAW: redraw_all(); break;
+            case M_RESIZE: want_resize = 1; break;   /* not here: it closes the menus being read */
             case M_UPDATE:
                 scan_volumes();
                 redraw_all();
@@ -1451,6 +1486,7 @@ static int run_shell;
 static struct MsgPort *idcmp;
 static APTR vi;
 static struct Menu *menus;
+static int resize_shown, resize_greyed;     /* 0.1.22: Resize to Window in the menu, and greyed */
 
 /* The picture, decoded in a process of its own (0.1.3): IPrefs' root picture; ENV:OpenBench/NoPicture, none. */
 static void start_picture(void)
@@ -1530,11 +1566,17 @@ static void desktop_down(void)
     if (look.scr) { UnlockPubScreen(NULL, look.scr); look.scr = NULL; }
 }
 
+static int native_monitor(ULONG *mode_id);
+static int native_differs(void);
+static void mark_ours(void);
+
 /* The desktop on the Workbench screen: the theme, the root window with its menus and icons, the picture.
  * 1 when it is up; 0 with whatever was opened still to be given up with desktop_down. */
 static int desktop_up(void)
 {
     int mode;
+    struct NewMenu nm[sizeof newmenus / sizeof newmenus[0]];
+    int i, k;
     if (!look.scr && !(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) return 0;
     load_theme(&mode);
     if (!ogt_ctx_init(&ctx, look.scr, &theme, mode) && !ogt_ctx_init(&ctx, look.scr, &theme, OGT_LIGHT)) return 0;
@@ -1548,7 +1590,9 @@ static int desktop_up(void)
     bd_h = look.scr->Height;
     backdrop = gradient_backdrop(bd_w, bd_h);
     backfill_hook.h_Entry = (ULONG (*)())bf_entry;
-    root = OpenWindowTags(NULL, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
+    /* 0.1.22: a Workbench window (WFLG_WBENCHWINDOW, first: the other tags add to it), as all of OpenBench's
+     * are (mark_ours), so CloseWorkBench() asks OpenBench to close it instead of refusing at once */
+    root = OpenWindowTags(NULL, WA_Flags, WFLG_WBENCHWINDOW, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
                           WA_Height, look.scr->Height - look.scr->BarHeight - 1, WA_PubScreen, (ULONG)look.scr,
                           WA_Backdrop, TRUE, WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_BackFill, (ULONG)&backfill_hook,
                           WA_ReportMouse, TRUE, WA_NewLookMenus, TRUE, WA_Activate, TRUE,
@@ -1561,14 +1605,330 @@ static int desktop_up(void)
     SetDrMd(root->RPort, JAM1);
     label_h = root->RPort->TxHeight;
     dri = GetScreenDrawInfo(look.scr);
-    if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(newmenus, TAG_DONE)) &&
+    /* the menus; Resize to Window only on a Native mode, greyed while the size is already the one asked for */
+    resize_shown = native_monitor(NULL) > 0;
+    for (i = k = 0; i < (int)(sizeof newmenus / sizeof newmenus[0]); i++) {
+        if (i == RESIZE_INDEX && !resize_shown) continue;
+        nm[k] = newmenus[i];
+        if (i == RESIZE_INDEX && !native_differs()) nm[k].nm_Flags |= NM_ITEMDISABLED;
+        k++;
+    }
+    resize_greyed = resize_shown && !native_differs();
+    if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(nm, TAG_DONE)) &&
         LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
         SetMenuStrip(root, menus);
     scan_volumes();
     draw_icons();
     titles_everywhere();
     start_picture();
+    mark_ours();
     return 1;
+}
+
+/* ---- Intuition's Workbench, and Resize to Window (0.1.22, the native screen mode's step 4) -------------- *
+ * Measured on OS 3.2.3 (lab backlog, 12 October 2026, tools/alohaprobe): CloseWorkBench() refuses at once,
+ * telling the Workbench nothing, while the screen has a window that isn't the Workbench's (one without
+ * WFLG_WBENCHWINDOW). Otherwise it sends the registered Workbench port WBENCHCLOSE, waits for the answer and
+ * closes the screen; when that fails (a program still holds a lock on the screen), it sends WBENCHOPEN. So
+ * OpenBench registers its port (AlohaWorkbench), marks its own windows as the Workbench's (the root window, the
+ * drawers, the dock, the Information windows: mark_ours), closes them on WBENCHCLOSE and opens them again on
+ * WBENCHOPEN. A reset by another program (IPrefs, for ScreenMode prefs' Use) then needs no OpenLook; with
+ * OpenLook its close notice comes first, as in 0.1.19, and the two agree. CloseWorkBench() and OpenWorkBench()
+ * are called from a process of OpenBench's own (reset_entry): Intuition waits for OpenBench's answer to
+ * WBENCHCLOSE, which OpenBench's own process could not give while inside the call. */
+/* 0: the desktop is up; 1: down, the screen being reset; 2: to come up again (tried each time round) */
+static int wb_down;
+static struct MsgPort *aloha_port;          /* Intuition's Workbench messages */
+static int aloha_on;
+static struct Library *OpenRTGBase;         /* openrtg.library 0.17 or later, for the Native size; else NULL */
+static ULONG last_ask;                      /* ASK when last seen: a new value is a page asking to follow now */
+static int ask_seen;
+
+/* The drawers open when the screen closed: where they were, to put them back (moved in at a smaller size). */
+static struct { WORD x, y, w, h; } drawer_box[MAX_WINDOWS];
+static int nreopen;
+
+/* The monitor (1-4) whose Native mode the Workbench screen is on, else 0; its ModeID in *mode_id. */
+static int native_monitor(ULONG *mode_id)
+{
+    ULONG id;
+    if (!look.scr || !OpenRTGBase) return 0;
+    id = GetVPModeID(&look.scr->ViewPort);
+    if (mode_id) *mode_id = id;
+    return OB_IS_NATIVE(id) ? (int)((id >> 24) & 0x0F) : 0;
+}
+
+/* 1 when the Workbench screen is on a Native mode and the host asks for another size. */
+static int native_differs(void)
+{
+    struct ob_native_size ns;
+    int n = native_monitor(NULL);
+    if (!n || !ORTG_NATIVESIZE(OpenRTGBase, (ULONG)n, &ns) || !ns.width || !ns.height) return 0;
+    return ns.width != look.scr->Width || ns.height != look.scr->Height;
+}
+
+/* OpenLook's close notice's list (Common/wbclose.h): the programs that close their windows when told. */
+static struct WBNRoot *wbn_root(void)
+{
+    struct WBNRoot *r = (struct WBNRoot *)FindSemaphore((STRPTR)WBN_SEM_NAME);   /* under Forbid */
+    return r && r->magic == WBN_MAGIC ? r : NULL;
+}
+
+/* 1 when OpenLook runs, so its patch tells every registered program to close before the screen does. */
+static int openlook_running(void)
+{
+    struct MsgPort *p;
+    int on;
+    Forbid();
+    p = FindPort((CONST_STRPTR)OL_PORT_NAME);
+    on = p && p->mp_Node.ln_Pri == OL_PORT_PRI && ((const struct ol_port_view *)p)->magic == OL_MAGIC;
+    Permit();
+    return on;
+}
+
+/* 1 when task t is OpenBench's: its own process, the dock, an Information window's. Under Forbid. */
+static int task_ours(struct Task *t)
+{
+    return t && (t == main_task || t == (struct Task *)dock_task ||
+                 (t->tc_Node.ln_Name && !strcmp(t->tc_Node.ln_Name, "OpenBench Information")));
+}
+
+/* 1 when task t has registered for OpenLook's close notice. Under Forbid. */
+static int task_told(struct WBNRoot *r, struct Task *t)
+{
+    struct MinNode *n;
+    if (!r || !t) return 0;
+    for (n = r->clients.mlh_Head; n->mln_Succ; n = n->mln_Succ)
+        if (((struct WBNClient *)n)->task == t) return 1;
+    return 0;
+}
+
+/* OpenBench's windows marked as the Workbench's (WFLG_WBENCHWINDOW), as Workbench's own are, so Intuition asks
+ * OpenBench to close them instead of refusing. The drawers (opengadtools' wb_drawer), the dock (OpenDock's code)
+ * and the Information windows (processes of their own) open theirs without it: the flag is set after, here,
+ * each time the desktop comes up and every two seconds. */
+static void mark_ours(void)
+{
+    struct Window *w;
+    if (!look.scr) return;
+    Forbid();
+    for (w = look.scr->FirstWindow; w; w = w->NextWindow)
+        if (w->UserPort && task_ours(w->UserPort->mp_SigTask)) w->Flags |= WFLG_WBENCHWINDOW;
+    Permit();
+}
+
+/* The windows on the Workbench screen that would stop it closing: not OpenBench's, and not of a program
+ * OpenLook's notice will close (when OpenLook runs). Their titles (else their program's name), one to a line,
+ * at most eight, into out; how many there are. scr NULL: the Workbench screen, found by its flag. */
+static int blocking_windows(struct Screen *scr, char *out, int n)
+{
+    struct Window *w;
+    struct WBNRoot *r;
+    int count = 0, k = 0, told = openlook_running();
+    out[0] = 0;
+    Forbid();
+    if (!scr)
+        for (scr = IntuitionBase->FirstScreen; scr; scr = scr->NextScreen)
+            if ((scr->Flags & SCREENTYPE) == WBENCHSCREEN) break;
+    r = told ? wbn_root() : NULL;
+    for (w = scr ? scr->FirstWindow : NULL; w; w = w->NextWindow) {
+        struct Task *t = w->UserPort ? w->UserPort->mp_SigTask : NULL;
+        const char *name = (const char *)w->Title;
+        char line[60];
+        int j;
+        if (task_ours(t) || (told && task_told(r, t))) continue;
+        if (!name || !name[0]) name = t && t->tc_Node.ln_Name ? t->tc_Node.ln_Name : "a window with no title";
+        snprintf(line, sizeof line, "  %s\n", name);
+        for (j = 0; line[j]; j++) if (line[j] == '%') line[j] = '_';   /* the requester's text is a format */
+        if (strstr(out, line)) continue;                             /* named once */
+        if (++count <= 8 && k + (int)strlen(line) < n) { strcpy(out + k, line); k += (int)strlen(line); }
+    }
+    Permit();
+    if (count > 8 && k + 20 < n) snprintf(out + k, (size_t)(n - k), "  and %d more\n", count - 8);
+    return count;
+}
+
+/* The dock told to close (WBC_CLOSE) or open (WBC_OPEN) through its own close notice record, as OpenLook tells
+ * it; closing waits up to 3 s for it to say it has. OpenLook may tell it too: the dock takes either. */
+static void tell_dock(LONG what)
+{
+    struct WBNRoot *r;
+    struct MinNode *n;
+    struct WBNClient *c = NULL;
+    int i;
+    Forbid();
+    if (dock_task && (r = wbn_root()))
+        for (n = r->clients.mlh_Head; n->mln_Succ; n = n->mln_Succ)
+            if (((struct WBNClient *)n)->task == (struct Task *)dock_task) { c = (struct WBNClient *)n; break; }
+    if (c) {
+        if (what == WBC_CLOSE) c->ack = 0;
+        c->want = what;
+        Signal(c->task, c->sigmask);
+    }
+    Permit();
+    for (i = 0; c && what == WBC_CLOSE && i < 150; i++) {
+        int done;
+        Forbid();
+        done = !dock_task || c->ack;               /* the record goes with the dock */
+        Permit();
+        if (done) break;
+        Delay(1);
+    }
+}
+
+/* Everything OpenBench has on the screen closed, the drawers' places kept: before the screen closes. */
+static void go_down(void)
+{
+    int i;
+    nreopen = ndrawers;
+    for (i = 0; i < ndrawers; i++) {
+        struct Window *w = wb_drawer_window(drawers[i]);
+        drawer_box[i].x = w->LeftEdge; drawer_box[i].y = w->TopEdge;
+        drawer_box[i].w = w->Width; drawer_box[i].h = w->Height;
+    }
+    desktop_down();
+    tell_dock(WBC_CLOSE);
+}
+
+/* The desktop on the screen again, the drawers where they were, moved in (and made smaller) where they would
+ * now fall off the screen. 1 when it is up. */
+static int go_up(void)
+{
+    int i;
+    if (!desktop_up()) return 0;
+    for (i = 0; i < nreopen; i++) {
+        char path[sizeof drawer_paths[0]];
+        WORD x = drawer_box[i].x, y = drawer_box[i].y, w = drawer_box[i].w, h = drawer_box[i].h;
+        WORD sw = look.scr->Width, sh = look.scr->Height, top = look.scr->BarHeight + 1;
+        memcpy(path, drawer_paths[i], sizeof path);   /* open_drawer writes drawer_paths[ndrawers] */
+        if (!open_drawer(path)) continue;
+        if (w > sw) w = sw;
+        if (h > sh - top) h = sh - top;
+        if (x + w > sw) x = sw - w;
+        if (y + h > sh) y = sh - h;
+        if (x < 0) x = 0;
+        if (y < top) y = top;
+        ChangeWindowBox(wb_drawer_window(drawers[ndrawers - 1]), x, y, w, h);
+    }
+    nreopen = 0;
+    tell_dock(WBC_OPEN);
+    mark_ours();
+    return 1;
+}
+
+/* The reset's process: CloseWorkBench(), then OpenWorkBench() when the screen closed. */
+static volatile int reset_busy;
+static volatile LONG reset_closed, reset_opened;
+static BYTE reset_sig = -1;
+static char reset_blockers[480];
+static int reset_refused;                   /* the last reset was refused: say so once the desktop is back */
+
+static void reset_entry(void)
+{
+    LONG closed = CloseWorkBench();
+    reset_closed = closed;
+    reset_opened = 0;
+    if (closed) reset_opened = OpenWorkBench() != 0;
+    else blocking_windows(NULL, reset_blockers, sizeof reset_blockers);
+    Forbid();
+    reset_busy = 0;
+    Signal(main_task, 1UL << reset_sig);
+    /* ends in dos.library under Forbid */
+}
+
+/* Resize to Window: the Workbench screen closed and opened again, so it opens at the size the host's window
+ * asks for. Another program's window would stop the close, so they are named first, with Try Again; nothing
+ * of OpenBench's is closed while one is open. */
+static int start_reset(void)
+{
+    char names[480], text[600];
+    if (reset_busy || reset_sig < 0 || !root) return 0;
+    for (;;) {
+        if (!blocking_windows(look.scr, names, sizeof names)) break;
+        snprintf(text, sizeof text, "The Workbench screen can't be made the window's size\n"
+                 "while these windows are open on it:\n%s\nClose them, then Try Again.", names);
+        if (!ask("OpenBench", text, "Try Again|Cancel")) return 0;
+        if (!root) return 0;                    /* the screen was reset meanwhile */
+    }
+    go_down();
+    wb_down = 1;                                /* OpenLook's notice and Intuition's WBENCHCLOSE find it down */
+    reset_busy = 1;
+    reset_blockers[0] = 0;
+    if (!CreateNewProcTags(NP_Entry, (ULONG)reset_entry, NP_StackSize, 8192, NP_Name, (ULONG)"OpenBench reset",
+                           TAG_DONE)) {
+        reset_busy = 0;
+        wb_down = 2;                            /* up again next time round */
+        return 0;
+    }
+    return 1;
+}
+
+static void resize_to_window(void)
+{
+    if (!native_differs()) {
+        if (look.scr) DisplayBeep(look.scr);
+        return;
+    }
+    start_reset();
+}
+
+/* The 2-second timer (0.1.22): a page asked the Amiga to follow now (ASK moved): Resize to Window. And the
+ * menu item greyed or not as the sizes match or not. */
+static void native_tick(void)
+{
+    struct ob_native_size ns;
+    int n = native_monitor(NULL), differs;
+    if (!n) n = 1;
+    if (!OpenRTGBase || !ORTG_NATIVESIZE(OpenRTGBase, (ULONG)n, &ns)) return;
+    if (!ask_seen) { last_ask = ns.ask; ask_seen = 1; }
+    if (!root) return;
+    differs = native_differs();
+    if (resize_shown && differs == resize_greyed) {
+        resize_greyed = !differs;
+        if (differs) OnMenu(root, FULLMENUNUM(0, RESIZE_ITEM, NOSUB));
+        else OffMenu(root, FULLMENUNUM(0, RESIZE_ITEM, NOSUB));
+    }
+    if (ns.ask != last_ask) {
+        last_ask = ns.ask;
+        if (differs && !reset_busy) start_reset();
+    }
+}
+
+static void aloha_start(void)
+{
+    struct Task *wb;
+    struct Library *o;
+    Forbid();
+    wb = FindTask((CONST_STRPTR)"Workbench");     /* Hyperion's Workbench has the port: it stays its */
+    Permit();
+    if (!wb && (aloha_port = CreateMsgPort())) {
+        AlohaWorkbench((LONG)aloha_port);
+        aloha_on = 1;
+    }
+    /* openrtg.library 0.17 or later has ORTG_NativeSize */
+    if ((o = OpenLibrary((CONST_STRPTR)"openrtg.library", 0))) {
+        if (o->lib_Version > 0 || o->lib_Revision >= 17) OpenRTGBase = o;
+        else CloseLibrary(o);
+    }
+    reset_sig = AllocSignal(-1);
+}
+
+static void aloha_stop(void)
+{
+    struct Message *m;
+    /* a reset still running has our code, and may be waiting for our answer to WBENCHCLOSE */
+    while (reset_busy) {
+        while (aloha_port && (m = GetMsg(aloha_port))) ReplyMsg(m);
+        Delay(2);
+    }
+    if (aloha_on) {
+        AlohaWorkbench(0);
+        aloha_on = 0;
+    }
+    while (aloha_port && (m = GetMsg(aloha_port))) ReplyMsg(m);
+    if (aloha_port) { DeleteMsgPort(aloha_port); aloha_port = NULL; }
+    if (OpenRTGBase) { CloseLibrary(OpenRTGBase); OpenRTGBase = NULL; }
+    if (reset_sig >= 0) { FreeSignal(reset_sig); reset_sig = -1; }
 }
 
 /* ENV:Sys's two files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns. */
@@ -1591,7 +1951,7 @@ static int run(void)
 {
     struct MsgPort *pub = NULL, *tport = NULL;
     struct timerequest *tr = NULL;
-    int i, ok = 0, timer = 0, wb_down = 0, nreopen = 0;
+    int i, ok = 0, timer = 0;
 
     main_task = FindTask(NULL);
     if (!(pub = CreateMsgPort())) return RETURN_FAIL;
@@ -1628,6 +1988,7 @@ static int run(void)
     look.info_object = ob_info_object;
     look.screen_title = screen_title;
     wb_prefs_load();
+    aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */
     if (!desktop_up()) goto out;
     ok = 1;
 
@@ -1654,6 +2015,7 @@ static int run(void)
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
                           (1UL << pub->mp_SigBit) | (dock_sig >= 0 ? 1UL << dock_sig : 0) |
                           (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
+                          (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
                           SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
         struct Message *lm;
@@ -1663,8 +2025,7 @@ static int run(void)
         switch (wbc_take()) {
         case WBC_CLOSE:
             if (!wb_down) {
-                nreopen = ndrawers;
-                desktop_down();
+                go_down();
                 wb_down = 1;
             }
             wbc_closed();
@@ -1673,19 +2034,45 @@ static int run(void)
             if (wb_down) wb_down = 2;               /* a refused reset says "open" too: only when we are down */
             break;
         }
-        if (wb_down == 2) {
-            if (desktop_up()) {
-                wb_down = 0;
-                for (i = 0; i < nreopen; i++) {
-                    char path[sizeof drawer_paths[0]];
-                    memcpy(path, drawer_paths[i], sizeof path);   /* open_drawer writes drawer_paths[ndrawers] */
-                    open_drawer(path);
+        /* 0.1.22: Intuition's own word, as the Workbench (AlohaWorkbench): WBENCHCLOSE before the screen closes
+         * (everything closed, then answered), WBENCHOPEN when it is back or the close was refused (answered,
+         * then opened again) */
+        if (aloha_port) {
+            struct IntuiMessage *am;
+            while ((am = (struct IntuiMessage *)GetMsg(aloha_port))) {
+                ULONG cl = am->Class;
+                UWORD code = am->Code;
+                if (cl == IDCMP_WBENCHMESSAGE && code == WBENCHCLOSE && !wb_down) {
+                    go_down();
+                    wb_down = 1;
                 }
-                nreopen = 0;
-            } else {
+                ReplyMsg(&am->ExecMessage);
+                if (cl == IDCMP_WBENCHMESSAGE && code == WBENCHOPEN && wb_down) wb_down = 2;
+            }
+        }
+        /* 0.1.22: Resize to Window's process is back: a refusal at once sends no WBENCHOPEN, so up again here */
+        if (reset_sig >= 0 && (sigs & (1UL << reset_sig)) && !reset_busy) {
+            if (wb_down) wb_down = 2;
+            if (!reset_closed) reset_refused = 1;
+        }
+        if (wb_down == 2) {
+            if (go_up())
+                wb_down = 0;
+            else {
                 desktop_down();                     /* the screen isn't there yet: tried again each tick */
                 wb_down = 2;
             }
+        }
+        if (reset_refused && root && !reset_busy) {
+            char text[640];
+            reset_refused = 0;
+            if (reset_blockers[0])
+                snprintf(text, sizeof text, "The Workbench screen couldn't be made the window's size\n"
+                         "while these windows are open on it:\n%s\nClose them, then Try Again.", reset_blockers);
+            else
+                snprintf(text, sizeof text, "The Workbench screen couldn't be made the window's size:\n"
+                         "a program is still using the screen.\nQuit the programs you started on it, then Try Again.");
+            if (ask("OpenBench", text, "Try Again|Cancel")) resize_to_window();
         }
         launches_reap();
         while ((lm = GetMsg(pub))) {
@@ -1723,6 +2110,8 @@ static int run(void)
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
             if (root && make_title()) titles_everywhere();
+            if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
+            if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
             tr->tr_time.tv_secs = 2;
             tr->tr_time.tv_micro = 0;
             SendIO((struct IORequest *)tr);
@@ -1746,9 +2135,14 @@ static int run(void)
                 }
         }
         if (quit) break;
+        if (want_resize) {
+            want_resize = 0;
+            if (root && !reset_busy) resize_to_window();
+        }
     }
 
 out:
+    aloha_stop();                               /* 0.1.22: Intuition's Workbench port given back first */
     ob_builtin_quit_all();                      /* the built-ins first: their code is ours */
 #ifdef OB_HAVE_TATA
     tata_inspect_end();
