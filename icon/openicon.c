@@ -503,13 +503,8 @@ static struct DiskObject *load(const char *path, ULONG flags, LONG *err)
         *err = core_error(r);
         return NULL;
     }
-    /* colour icons switched off (ICONCTRLA_SetGlobalColorIconSupport):
-     * only the classic pictures are handed out; a PNG icon keeps its own,
-     * having no other */
-    if (!Base->coloricons && !(icon->formats & IC_FMT_PNG)) {
-        icon->pal[0] = icon->pal[1] = NULL;
-        icon->argb[0] = icon->argb[1] = NULL;
-    }
+    /* ICONCTRLA_SetGlobalColorIconSupport is only stored: 3.2 still hands
+     * out a GlowIcon's colours with it off (iconprobe at f0c1694) */
     o = make_object(icon);
     if (!o) {
         ic_free(&env, icon);
@@ -890,13 +885,8 @@ static BOOL put_icon(CONST_STRPTR name, struct DiskObject *d, struct TagItem *ta
             err = ERROR_REQUIRED_ARG_MISSING;
         }
     } else if (name) {
-        /* a name too long for its .info: success, nothing written, and
-         * ERROR_TOO_MANY_LEVELS, so no file is overwritten by a cut name */
-        if (slen((const char *)FilePart(name)) > (ULONG)Base->maxnamelen) {
-            if (errp)
-                *errp = ERROR_TOO_MANY_LEVELS;
-            return TRUE;
-        }
+        /* the global max name length isn't enforced here: 3.2 writes a
+         * 36-character name with no error (iconprobe at f0c1694) */
         path = info_name(name);
     } else {
         err = ERROR_REQUIRED_ARG_MISSING;
@@ -954,11 +944,13 @@ static struct DiskObject *L_GetDiskObject(REG(a0, CONST_STRPTR name))
     return get_icon(name, NULL);
 }
 
+static struct DiskObject *empty_object(void);
+
 static struct DiskObject *L_GetDiskObjectNew(REG(a0, CONST_STRPTR name))
 {
     struct TagItem t[2];
-    if (!name)                      /* "allocated for you", for AddAppIcon: a project's default */
-        return default_icon(WBPROJECT, NULL, &(LONG){ 0 });
+    if (!name)                      /* for AddAppIcon: an empty one, all zero as 3.2's */
+        return empty_object();
     t[0].ti_Tag = ICONGETA_FailIfUnavailable;
     t[0].ti_Data = FALSE;
     t[1].ti_Tag = TAG_DONE;
@@ -1012,6 +1004,22 @@ static BOOL L_PutDefDiskObject(REG(a0, struct DiskObject *d))
  * picture and, for a drawer and the trashcan, the selected one, a drawer
  * window at 50,50 400x100 for a disk, a drawer and the trashcan; no
  * AppIcon. */
+/* GetDiskObjectNew(NULL)'s: ours to free, every field zero. */
+static struct DiskObject *empty_object(void)
+{
+    struct ic_icon *icon = AllocVec(sizeof *icon, MEMF_ANY | MEMF_CLEAR);
+    struct OIObject *o;
+    if (!icon)
+        return NULL;
+    o = make_object(icon);
+    if (!o) {
+        ic_free(&env, icon);
+        return NULL;
+    }
+    memset(&o->dobj, 0, sizeof o->dobj);
+    return &o->dobj;
+}
+
 static struct DiskObject *L_NewDiskObject(REG(d0, LONG type))
 {
     struct ic_icon *icon;
@@ -1224,11 +1232,15 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
             case ICONCTRLA_GetWidth: *lp = ic->pal[0] ? ic->pal[0]->width : 0; break;
             case ICONCTRLA_GetHeight: *lp = ic->pal[0] ? ic->pal[0]->height : 0; break;
             case ICONCTRLA_GetFrameless: *lp = ic->frameless; break;
-            case ICONCTRLA_GetAspectRatio: *(UBYTE *)t->ti_Data = ic->aspect; break;   /* a UBYTE * */
+            case ICONCTRLA_GetAspectRatio:  /* a UBYTE *, left alone with no colour picture as 3.2 */
+                if (ic->pal[0])
+                    *(UBYTE *)t->ti_Data = ic->aspect;
+                break;
             case ICONCTRLA_IsPaletteMapped: *lp = ic->pal[0] != NULL; break;
             case ICONCTRLA_IsNewIcon: *lp = (ic->formats & IC_FMT_NEWICONS) != 0; break;
             case ICONCTRLA_HasRealImage2: *lp = ic->pal[1] != NULL; break;
-            case ICONCTRLA_IsNativeIcon: *lp = TRUE; break;    /* one of ours (is_ours); the probe checks 3.2 */
+            /* 3.2: TRUE for a colour icon, FALSE for a classic one (iconprobe at f0c1694) */
+            case ICONCTRLA_IsNativeIcon: *lp = (ic->formats & (IC_FMT_OS35 | IC_FMT_ARGB | IC_FMT_PNG)) != 0; break;
             case ICONCTRLA_GetScreen: *(struct Screen **)t->ti_Data = NULL; break;
             default:
                 ok = FALSE;         /* step R3 */

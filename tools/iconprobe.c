@@ -30,7 +30,7 @@
 #include <proto/icon.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.4 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.5 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 static struct Library *os_base, *our_base;
@@ -729,15 +729,19 @@ static void review_cases(const char *temp)
     for (i = 0; names[i]; i++) {
         struct DiskObject *a, *b;
         LONG ea = 0, eb = 0;
-        struct TagItem t[4];
+        struct TagItem t[7];
         char w[48];
+        t[4] = raw_tags[0];     /* the file's own pictures, not remapped */
+        t[5] = raw_tags[1];
+        t[6].ti_Tag = TAG_DONE;
         t[0].ti_Tag = ICONGETA_GetDefaultName;
         t[0].ti_Data = (ULONG)names[i];
         t[1].ti_Tag = ICONGETA_GetDefaultType;
         t[1].ti_Data = WBDISK;
         t[2].ti_Tag = ICONA_ErrorCode;
         t[2].ti_Data = (ULONG)&ea;
-        t[3].ti_Tag = TAG_DONE;
+        t[3].ti_Tag = TAG_MORE;
+        t[3].ti_Data = (ULONG)&t[4];
         IconBase = os_base;
         a = GetIconTagList(NULL, t);
         t[2].ti_Data = (ULONG)&eb;
