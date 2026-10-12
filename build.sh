@@ -19,6 +19,10 @@ LIB="$COMMON -ffreestanding -fno-builtin -fno-tree-loop-distribute-patterns -fno
 "$CC" $LIB -o "$OUT/workbench.library" "$HERE/workbench/wblib.c" "$HERE/proxy/proxy.c" -lgcc
 # shellcheck disable=SC2086
 "$CC" $LIB -o "$OUT/icon.library" "$HERE/icon/iconlib.c" "$HERE/proxy/proxy.c" -lgcc
+# Step R2: icon.library's own reading and writing (icon/icon_core.c), not
+# switched on yet; compiled here so the stove checks it with -Werror.
+# shellcheck disable=SC2086
+"$CC" $LIB -Wextra -c -o /dev/null "$HERE/icon/icon_core.c"
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
 cp "$HERE/lab/Install-R1" "$HERE/lab/Uninstall-R1" "$OUT/"
