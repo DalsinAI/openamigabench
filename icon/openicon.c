@@ -100,6 +100,7 @@ struct OIObject {
     ULONG chipsize[2];
     struct DrawerData drawer;
     char *label;                    /* ICONGETA_Label's copy, if any */
+    struct ic_palpic selected;      /* no second picture: the first, its palette darkened */
 };
 
 /* ---- memory for the core ---- */
@@ -234,6 +235,22 @@ static struct OIObject *make_object(struct ic_icon *icon)
             icon->gheight = icon->argb[0]->height;
         }
     }
+    /* a colour icon with no second picture: 3.2 answers for the second
+     * with the first, its palette darkened as ChangeToSelectedIconColor
+     * does (iconprobe at d801676 and 0000c5c) */
+    if (icon->pal[0] && !icon->pal[1] && icon->pal[0]->ncolours) {
+        struct ic_palpic *p = icon->pal[0];
+        UBYTE *dark = ic_own(&env, icon, (ULONG)p->ncolours * 3);
+        ULONG i;
+        if (!dark) {
+            FreeVec(o);
+            return NULL;
+        }
+        for (i = 0; i < (ULONG)p->ncolours * 3; i++)
+            dark[i] = (UBYTE)(p->palette[i] > 40 ? p->palette[i] - 40 : 0);
+        o->selected = *p;
+        o->selected.palette = dark;
+    }
     d->do_Magic = WB_DISKMAGIC;
     d->do_Version = WB_DISKVERSION;
     d->do_Gadget.LeftEdge = icon->gleft;
@@ -351,8 +368,7 @@ static struct ic_icon *icon_from_object(struct DiskObject *d, ULONG drop)
         struct ic_planar *p;
         if (!im || (drop & IC_FMT_CLASSIC))
             continue;
-        if (k == 1 && (d->do_Gadget.Flags & GFLG_GADGHIGHBITS) != GFLG_GADGHIMAGE)
-            continue;
+        /* a SelectRender is written whatever the highlight says, as 3.2 does */
         p = ic_own(&env, icon, sizeof *p);
         if (!p)
             goto fail;
@@ -486,16 +502,29 @@ static BOOL save(const char *path, struct DiskObject *d, ULONG drop, LONG *err)
         return FALSE;
     }
     /* What OS 3.2's PutDiskObject writes in place of what it was given
-     * (iconprobe at 5c27ff1): the gadget as RELVERIFY only, a stack of 0 as
-     * 4096, an empty tool type array as none, and an OS 1.3 icon raised to
-     * the disk revision, its new drawer fields zero. */
+     * (iconprobe at 5c27ff1 and 0000c5c): a BOOLGADGET with RELVERIFY
+     * only, highlighted by its selected picture when it has one; a stack
+     * under 4096 as 4096; an empty tool type array as none; the revision
+     * byte as the disk revision (an OS 1.3 icon's new drawer fields zero).
+     * An icon whose picture is empty (NewDiskObject's) is refused. */
+    if ((!icon->planar[0] || !icon->planar[0]->width || !icon->planar[0]->height || !icon->planar[0]->size)
+        && !icon->form && !(icon->formats & IC_FMT_PNG)) {
+        ic_free(&env, icon);
+        *err = ERROR_OBJECT_WRONG_TYPE;
+        return FALSE;
+    }
     icon->gactivation = GACT_RELVERIFY;
-    if (!icon->stacksize)
+    icon->gtype = GTYP_BOOLGADGET;
+    if (icon->planar[1])
+        icon->gflags = (uint16_t)((icon->gflags & ~GFLG_GADGHIGHBITS) | GFLG_GADGIMAGE | GFLG_GADGHIMAGE);
+    else
+        icon->gflags |= GFLG_GADGIMAGE;
+    if (icon->stacksize < 4096)
         icon->stacksize = 4096;
     if (icon->tooltypes && !icon->tooltypes[0])
         icon->tooltypes = NULL;
-    if (!(icon->guserdata & 0xFF))
-        icon->guserdata = WB_DISKREVISION;
+    if ((icon->guserdata & 0xFF) != WB_DISKREVISION)
+        icon->guserdata = (icon->guserdata & ~0xFFUL) | WB_DISKREVISION;
     size = ic_write(&env, icon, NULL, 0);
     buf = AllocVec(size ? size : 1, MEMF_ANY);
     if (!buf) {
@@ -1011,9 +1040,12 @@ static struct ic_palpic *picture_for(struct ic_icon *ic, int k)
     return ic->pal[k] ? ic->pal[k] : ic->pal[0];
 }
 
-static struct ic_palpic *palette_for(struct ic_icon *ic, int k)
+static struct ic_palpic *palette_for(struct OIObject *o, struct ic_icon *ic, int k)
 {
-    struct ic_palpic *p = picture_for(ic, k);
+    struct ic_palpic *p;
+    if (k && !ic->pal[1] && o->selected.palette)
+        return &o->selected;
+    p = picture_for(ic, k);
     if (p && !p->ncolours)
         p = ic->pal[0];
     return p && p->ncolours ? p : NULL;
@@ -1076,13 +1108,13 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
             }
             case ICONCTRLA_GetPalette1:
             case ICONCTRLA_GetPalette2: {
-                struct ic_palpic *p = palette_for(ic, t->ti_Tag == ICONCTRLA_GetPalette2);
+                struct ic_palpic *p = palette_for(o, ic, t->ti_Tag == ICONCTRLA_GetPalette2);
                 *(struct ColorRegister **)t->ti_Data = p ? (struct ColorRegister *)p->palette : NULL;
                 break;
             }
             case ICONCTRLA_GetPaletteSize1:
             case ICONCTRLA_GetPaletteSize2: {
-                struct ic_palpic *p = palette_for(ic, t->ti_Tag == ICONCTRLA_GetPaletteSize2);
+                struct ic_palpic *p = palette_for(o, ic, t->ti_Tag == ICONCTRLA_GetPaletteSize2);
                 *lp = p ? p->ncolours : 0;
                 break;
             }
@@ -1137,9 +1169,19 @@ static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *
     return FALSE;                   /* step R3 */
 }
 
+/* OS 3.2's sum (iconprobe at 0000c5c): each gun 40 darker, down to 0. */
+static UBYTE selected_gun(UBYTE c)
+{
+    return (UBYTE)(c > 40 ? c - 40 : 0);
+}
+
 static void L_ChangeToSelectedIconColor(REG(a0, struct ColorRegister *cr))
 {
-    /* step R3 */
+    if (!cr)
+        return;
+    cr->red = selected_gun(cr->red);
+    cr->green = selected_gun(cr->green);
+    cr->blue = selected_gun(cr->blue);
 }
 
 /* ---- the tool type calls ---- */
