@@ -1158,7 +1158,7 @@ static APTR L_FreeAlloc(REG(a0, struct FreeList *fl), REG(a1, ULONG len), REG(a2
     return mem;
 }
 
-static BOOL L_FreeFree(REG(a0, struct FreeList *fl), REG(a1, APTR address))
+static ULONG L_FreeFree(REG(a0, struct FreeList *fl), REG(a1, APTR address))
 {
     struct Node *n;
     for (n = fl->fl_MemList.lh_Head; n->ln_Succ; n = n->ln_Succ) {

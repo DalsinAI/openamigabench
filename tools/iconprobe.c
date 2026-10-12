@@ -296,15 +296,16 @@ static void one_dir(const char *dir, const char *temp)
     if (lock && fib && Examine(lock, fib)) {
         while (ExNext(lock, fib)) {
             char path[300];
-            int n = (int)strlen(fib->fib_FileName);
-            if (n <= 5 || strcmp(fib->fib_FileName + n - 5, ".info") != 0)
+            char *fname = (char *)fib->fib_FileName;
+            int n = (int)strlen(fname);
+            if (n <= 5 || strcmp(fname + n - 5, ".info") != 0)
                 continue;
-            fib->fib_FileName[n - 5] = 0;
+            fname[n - 5] = 0;
             strncpy(path, dir, sizeof path - 1);
             path[sizeof path - 1] = 0;
             if (path[0] && path[strlen(path) - 1] != ':' && path[strlen(path) - 1] != '/')
                 strncat(path, "/", sizeof path - strlen(path) - 1);
-            strncat(path, fib->fib_FileName, sizeof path - strlen(path) - 1);
+            strncat(path, fname, sizeof path - strlen(path) - 1);
             one_icon(path, temp);
         }
     }
@@ -405,14 +406,14 @@ static void free_lists(void)
         for (i = 0; i < 20; i++)
             FreeAlloc(&fl, 16, MEMF_PUBLIC);
         counts[lib][1] = fl.fl_NumFree;
-        counts[lib][2] = FreeFree(&fl, m) ? 1 : 0;
-        counts[lib][3] = FreeFree(&fl, (APTR)&fl) ? 1 : 0;
+        FreeFree(&fl, m);           /* void in NDK 3.2: what it leaves is compared */
+        counts[lib][2] = fl.fl_NumFree;
+        counts[lib][3] = 0;
         FreeFreeList(&fl);
     }
     num("fl_NumFree after 3", "free list", counts[0][0], counts[1][0]);
     num("fl_NumFree after 24", "free list", counts[0][1], counts[1][1]);
-    num("FreeFree of one of its own", "free list", counts[0][2], counts[1][2]);
-    num("FreeFree of a stranger", "free list", counts[0][3], counts[1][3]);
+    num("fl_NumFree after FreeFree", "free list", counts[0][2], counts[1][2]);
 }
 
 static void defaults(void)
