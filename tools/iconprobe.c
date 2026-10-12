@@ -25,14 +25,24 @@
 #include <intuition/intuition.h>
 #include <workbench/workbench.h>
 #include <workbench/icon.h>
+#include <intuition/imageclass.h>
+#include <intuition/screens.h>
+#include <graphics/gfxbase.h>
+#include <graphics/rastport.h>
+#include <graphics/gfx.h>
+#include <graphics/text.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/icon.h>
+#include <proto/graphics.h>
+#include <proto/intuition.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.5 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.7 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
+struct GfxBase *GfxBase;
+struct IntuitionBase *IntuitionBase;
 static struct Library *os_base, *our_base;
 static int show_all;
 static ULONG cases, diffs, extras;
@@ -875,6 +885,190 @@ static void review_cases(const char *temp)
     }
 }
 
+/* ---- drawing (step R3) ----
+ * Both libraries draw into the same 8-plane bitmap of their own (not the
+ * screen's, so the answers don't depend on the lab's screen mode), with the
+ * Workbench screen's pens. Each case's rectangle and pixels are compared;
+ * the first few that differ are shown as hex pens, Hyperion's then ours. */
+
+#define CW 112
+#define CH 72
+#define AT_X 24
+#define AT_Y 16
+#define MAX_DUMPS 3              /* for each icon, before and after LayoutIconA */
+
+static struct RastPort canvas;
+static UBYTE pixels[2][CW * CH];
+static int dumps;
+
+static void grab(UBYTE *out)
+{
+    int x, y;
+    for (y = 0; y < CH; y++)
+        for (x = 0; x < CW; x++)
+            out[y * CW + x] = (UBYTE)ReadPixel(&canvas, x, y);
+}
+
+/* The pens of both pictures, inside the box where either differs from the
+ * background (pen 5), so the dump is no bigger than it needs to be. */
+static void dump(const char *name)
+{
+    int x, y, k, x0 = CW, y0 = CH, x1 = -1, y1 = -1;
+    for (y = 0; y < CH; y++)
+        for (x = 0; x < CW; x++)
+            for (k = 0; k < 2; k++)
+                if (pixels[k][y * CW + x] != 5) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+    if (x1 < 0)
+        return;
+    printf("PIXELS %s: x %d-%d y %d-%d (drawn at %d,%d), Hyperion | ours\n", name, x0, x1, y0, y1, AT_X, AT_Y);
+    for (y = y0; y <= y1; y++) {
+        for (k = 0; k < 2; k++) {
+            printf(k ? " | " : "  ");
+            for (x = x0; x <= x1; x++)
+                printf("%x", pixels[k][y * CW + x] & 15);
+        }
+        printf("\n");
+    }
+}
+
+static void one_drawing(const char *name, struct DiskObject *a, struct DiskObject *b, STRPTR label,
+                        struct TagItem *tags, ULONG state)
+{
+    struct DiskObject *d[2];
+    struct Rectangle r[2];
+    BOOL ok[2];
+    char w[96];
+    int k;
+    d[0] = a;
+    d[1] = b;
+    for (k = 0; k < 2; k++) {
+        IconBase = k ? our_base : os_base;
+        memset(&r[k], 0x55, sizeof r[k]);
+        ok[k] = GetIconRectangleA(&canvas, d[k], label, &r[k], tags);
+        SetRast(&canvas, 5);
+        SetAPen(&canvas, 1);
+        DrawIconStateA(&canvas, d[k], label, AT_X, AT_Y, state, tags);  /* VOID in 3.2 */
+        grab(pixels[k]);
+    }
+    snprintf(w, sizeof w, "%s state %lu", name, (unsigned long)state);
+    num("rectangle says", w, ok[0], ok[1]);
+    if (ok[0] && ok[1]) {
+        num("rectangle x", w, (LONG)r[0].MinX << 16 | (UWORD)r[0].MaxX, (LONG)r[1].MinX << 16 | (UWORD)r[1].MaxX);
+        num("rectangle y", w, (LONG)r[0].MinY << 16 | (UWORD)r[0].MaxY, (LONG)r[1].MinY << 16 | (UWORD)r[1].MaxY);
+    }
+    cases++;
+    if (memcmp(pixels[0], pixels[1], sizeof pixels[0])) {
+        diffs++;
+        printf("DIFF %s pixels: Hyperion crc %08lx, ours crc %08lx\n", w, (unsigned long)crc(pixels[0], sizeof pixels[0]),
+               (unsigned long)crc(pixels[1], sizeof pixels[1]));
+        if (dumps++ < MAX_DUMPS)
+            dump(w);
+    }
+}
+
+static void drawing(void)
+{
+    static const char *const icons[] = {
+        "SYS:Storage/OpenBench-Icons/classic_tool", "SYS:Storage/OpenBench-Icons/classic_drawer",
+        "SYS:Storage/OpenBench-Icons/glow_19", NULL
+    };
+    static const ULONG states[] = { IDS_NORMAL, IDS_SELECTED, IDS_DISABLED };
+    struct Screen *scr = NULL;
+    struct DrawInfo *dri = NULL;
+    struct BitMap *bm = NULL;
+    int i, v, s, lay;
+    GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 39);
+    IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 39);
+    if (GfxBase && IntuitionBase) {
+        scr = LockPubScreen(NULL);
+        if (scr)
+            dri = GetScreenDrawInfo(scr);
+        bm = AllocBitMap(CW, CH, 8, BMF_CLEAR, NULL);
+    }
+    if (!scr || !dri || !bm) {
+        printf("drawing: no Workbench screen or bitmap, not tested\n");
+        goto done;
+    }
+    InitRastPort(&canvas);
+    canvas.BitMap = bm;
+    SetFont(&canvas, GfxBase->DefaultFont);
+    {
+        struct Rectangle ea, eb;
+        memset(&ea, 0x55, sizeof ea);
+        memset(&eb, 0x55, sizeof eb);
+        IconBase = os_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalEmbossRect, &ea, TAG_DONE);
+        IconBase = our_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalEmbossRect, &eb, TAG_DONE);
+        num("emboss x", "globals", (LONG)ea.MinX << 16 | (UWORD)ea.MaxX, (LONG)eb.MinX << 16 | (UWORD)eb.MaxX);
+        num("emboss y", "globals", (LONG)ea.MinY << 16 | (UWORD)ea.MaxY, (LONG)eb.MinY << 16 | (UWORD)eb.MaxY);
+        printf("drawing: Hyperion's emboss rect %d,%d %d,%d\n", ea.MinX, ea.MinY, ea.MaxX, ea.MaxY);
+    }
+    printf("drawing: Workbench screen depth %ld, font %s %ld, emboss rect and frameless as globals above\n",
+           (long)GetBitMapAttr(scr->RastPort.BitMap, BMA_DEPTH), (char *)GfxBase->DefaultFont->tf_Message.mn_Node.ln_Name,
+           (long)GfxBase->DefaultFont->tf_YSize);
+    for (i = 0; icons[i]; i++)
+        for (lay = 0; lay < 2; lay++) {
+            LONG e;
+            struct DiskObject *a = get(os_base, icons[i], &e), *b = get(our_base, icons[i], &e);
+            dumps = 0;
+            if (!a || !b) {
+                num("read", icons[i], a != NULL, b != NULL);
+            } else {
+                if (lay) {
+                    BOOL la, lb;
+                    IconBase = os_base;
+                    la = LayoutIconA(a, scr, NULL);
+                    IconBase = our_base;
+                    lb = LayoutIconA(b, scr, NULL);
+                    num("layout says", icons[i], la, lb);
+                }
+                for (v = 0; v < 7; v++) {
+                    struct TagItem t[3];
+                    char w[80];
+                    STRPTR label = v == 1 || v == 5 ? (STRPTR)"Label" : NULL;
+                    t[0].ti_Tag = TAG_DONE;
+                    t[1].ti_Tag = TAG_DONE;
+                    t[2].ti_Tag = TAG_DONE;
+                    switch (v) {
+                    case 2: t[0].ti_Tag = ICONDRAWA_Frameless; t[0].ti_Data = TRUE; break;
+                    case 3: t[0].ti_Tag = ICONDRAWA_Borderless; t[0].ti_Data = TRUE; break;
+                    case 4: t[0].ti_Tag = ICONDRAWA_EraseBackground; t[0].ti_Data = FALSE; break;
+                    case 5: t[0].ti_Tag = ICONDRAWA_DrawInfo; t[0].ti_Data = (ULONG)dri; break;
+                    case 6: t[0].ti_Tag = ICONDRAWA_Frameless; t[0].ti_Data = FALSE; break;
+                    }
+                    snprintf(w, sizeof w, "%s%s %s", icons[i] + 28, lay ? " laid out" : "",
+                             (const char *const[]){ "plain", "label", "frameless", "borderless", "no erase",
+                                                    "label+drawinfo", "framed" }[v]);
+                    for (s = 0; s < 3; s++)
+                        one_drawing(w, a, b, label, t, states[s]);
+                }
+            }
+            IconBase = os_base;
+            if (a) FreeDiskObject(a);
+            IconBase = our_base;
+            if (b) FreeDiskObject(b);
+        }
+done:
+    if (bm) {
+        WaitBlit();
+        FreeBitMap(bm);
+    }
+    if (dri)
+        FreeScreenDrawInfo(scr, dri);
+    if (scr)
+        UnlockPubScreen(NULL, scr);
+    if (IntuitionBase)
+        CloseLibrary((struct Library *)IntuitionBase);
+    if (GfxBase)
+        CloseLibrary((struct Library *)GfxBase);
+}
+
 int main(void)
 {
     struct RDArgs *rd;
@@ -910,6 +1104,7 @@ int main(void)
     writing_new(temp);
     selected_colours();
     review_cases(temp);
+    drawing();
     if (args[A_DIRS]) {
         char **d;
         for (d = (char **)args[A_DIRS]; *d; d++)
