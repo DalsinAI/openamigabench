@@ -941,7 +941,7 @@ static void one_drawing(const char *name, struct DiskObject *a, struct DiskObjec
 {
     struct DiskObject *d[2];
     struct Rectangle r[2];
-    BOOL ok[2], drew[2];
+    BOOL ok[2];
     char w[96];
     int k;
     d[0] = a;
@@ -952,7 +952,7 @@ static void one_drawing(const char *name, struct DiskObject *a, struct DiskObjec
         ok[k] = GetIconRectangleA(&canvas, d[k], label, &r[k], tags);
         SetRast(&canvas, 5);
         SetAPen(&canvas, 1);
-        drew[k] = DrawIconStateA(&canvas, d[k], label, AT_X, AT_Y, state, tags);
+        DrawIconStateA(&canvas, d[k], label, AT_X, AT_Y, state, tags);  /* VOID in 3.2 */
         grab(pixels[k]);
     }
     snprintf(w, sizeof w, "%s state %lu", name, (unsigned long)state);
@@ -961,7 +961,6 @@ static void one_drawing(const char *name, struct DiskObject *a, struct DiskObjec
         num("rectangle x", w, (LONG)r[0].MinX << 16 | (UWORD)r[0].MaxX, (LONG)r[1].MinX << 16 | (UWORD)r[1].MaxX);
         num("rectangle y", w, (LONG)r[0].MinY << 16 | (UWORD)r[0].MaxY, (LONG)r[1].MinY << 16 | (UWORD)r[1].MaxY);
     }
-    num("draw says", w, drew[0], drew[1]);
     cases++;
     if (memcmp(pixels[0], pixels[1], sizeof pixels[0])) {
         diffs++;

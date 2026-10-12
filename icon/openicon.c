@@ -1430,7 +1430,7 @@ static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, 
     FreeVec(row);
 }
 
-static BOOL L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
+static void L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
                              REG(d0, LONG x), REG(d1, LONG y), REG(d2, ULONG state), REG(a3, struct TagItem *tags))
 {
     static const UWORD ghost[2] = { 0x8888, 0x2222 };
@@ -1446,7 +1446,7 @@ static BOOL L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     UWORD *afpt;
     UBYTE afsize;
     if (!rp || !d)
-        return FALSE;
+        return;
     shape_of(rp, d, label, tags, &sh);
     apen = GetAPen(rp);
     bpen = GetBPen(rp);
@@ -1514,7 +1514,6 @@ static BOOL L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskOb
     SetAPen(rp, apen);
     SetBPen(rp, bpen);
     SetDrMd(rp, drmd);
-    return TRUE;
 }
 
 /* OS 3.2's sum (iconprobe at 0000c5c): each gun 40 darker, down to 0. */
