@@ -529,10 +529,12 @@ static const char *const def_names[] = {
 };
 
 /* A built-in picture: a framed box in the 4 Workbench colours, its kind
- * drawn inside (a drawer's handle, a tool's bar, a page's lines). */
+ * drawn inside (a drawer's handle, a tool's bar, a page's lines). Our own
+ * drawing, at the size 3.2's built-in ones have (35x17, iconprobe at
+ * d801676). */
 static struct ic_planar *builtin_picture(struct ic_icon *icon, LONG type, int selected)
 {
-    enum { W = 32, H = 22, ROW = 4 };
+    enum { W = 35, H = 17, ROW = 6 };
     struct ic_planar *p = ic_own(&env, icon, sizeof *p + ROW * H * 2);
     int x, y;
     if (!p)
@@ -552,13 +554,13 @@ static struct ic_planar *builtin_picture(struct ic_icon *icon, LONG type, int se
                 pen = 1;
             else if (inside) {
                 pen = selected ? 3 : 2;
-                if (type == WBDRAWER && y == 6 && x > 11 && x < 20)
+                if (type == WBDRAWER && y == 5 && x > 13 && x < 22)
                     pen = 1;
                 if (type == WBTOOL && y > 3 && y < 7)
                     pen = 3;
                 if (type == WBPROJECT && (y % 4) == 0 && x > 5 && x < W - 6)
                     pen = 1;
-                if ((type == WBDISK || type == WBKICK) && x > 9 && x < 22 && y < 8)
+                if ((type == WBDISK || type == WBKICK) && x > 10 && x < 24 && y < 7)
                     pen = 0;
                 if (type == WBGARBAGE && (x % 5) == 0)
                     pen = 1;
@@ -570,6 +572,13 @@ static struct ic_planar *builtin_picture(struct ic_icon *icon, LONG type, int se
         }
     return p;
 }
+
+/* The highlight 3.2 gives each type's new and built-in icons (iconprobe
+ * at 5c27ff1 and d801676): a selected picture for a drawer and the
+ * trashcan, complement for a tool, a box for the rest. */
+static const UBYTE new_highlight[] = {
+    0, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHCOMP, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHBOX, GFLG_GADGHBOX
+};
 
 static struct DiskObject *builtin(LONG type)
 {
@@ -583,14 +592,15 @@ static struct DiskObject *builtin(LONG type)
     icon->stacksize = (type == WBTOOL || type == WBPROJECT) ? 4096 : 0;
     icon->guserdata = WB_DISKREVISION;
     icon->planar[0] = builtin_picture(icon, type, 0);
-    icon->planar[1] = builtin_picture(icon, type, 1);
-    if (!icon->planar[0] || !icon->planar[1]) {
+    if (new_highlight[type] == GFLG_GADGHIMAGE)
+        icon->planar[1] = builtin_picture(icon, type, 1);
+    if (!icon->planar[0] || (new_highlight[type] == GFLG_GADGHIMAGE && !icon->planar[1])) {
         ic_free(&env, icon);
         return NULL;
     }
     icon->gwidth = icon->planar[0]->width;
     icon->gheight = (uint16_t)(icon->planar[0]->height + 1);
-    icon->gflags = GFLG_GADGIMAGE | GFLG_GADGHIMAGE;
+    icon->gflags = GFLG_GADGIMAGE | new_highlight[type];
     icon->gactivation = GACT_RELVERIFY | GACT_IMMEDIATE;
     icon->gtype = GTYP_BOOLGADGET;
     if (type == WBDISK || type == WBDRAWER || type == WBGARBAGE) {
@@ -693,7 +703,7 @@ static LONG kind_of(CONST_STRPTR name, LONG *err)
 /* GetIconTagList: the heart of reading. */
 static struct DiskObject *get_icon(CONST_STRPTR name, struct TagItem *tags)
 {
-    LONG err = 0, deftype, *errp, *isdef;
+    LONG err = 0, deftype, *errp, *isdef, was_default = FALSE;
     STRPTR defname;
     BOOL fail_if, palette;
     struct DiskObject *d = NULL;
@@ -708,13 +718,11 @@ static struct DiskObject *get_icon(CONST_STRPTR name, struct TagItem *tags)
     isdef = (LONG *)GetTagData(ICONGETA_IsDefaultIcon, 0, tags);
     if (!palette)
         flags |= IC_READ_NOPICTURES;
-    if (isdef)
-        *isdef = FALSE;
-
+    /* *isdef is only written when an icon comes back (3.2 leaves it) */
     if (deftype || defname) {
         d = default_icon(deftype, defname, &err);
-        if (d && isdef)
-            *isdef = TRUE;
+        if (d)
+            was_default = TRUE;
     } else if (name) {
         path = info_name(name);
         if (!path) {
@@ -727,8 +735,8 @@ static struct DiskObject *get_icon(CONST_STRPTR name, struct TagItem *tags)
             LONG kerr = 0, type = kind_of(name, &kerr);
             if (type) {
                 d = default_icon(type, NULL, &err);
-                if (d && isdef)
-                    *isdef = TRUE;
+                if (d)
+                    was_default = TRUE;
             } else {
                 err = kerr;
             }
@@ -736,6 +744,8 @@ static struct DiskObject *get_icon(CONST_STRPTR name, struct TagItem *tags)
     } else {
         err = ERROR_REQUIRED_ARG_MISSING;
     }
+    if (d && isdef)
+        *isdef = was_default;
     if (d) {
         STRPTR label = (STRPTR)GetTagData(ICONGETA_Label, 0, tags);
         if (label) {
@@ -883,14 +893,11 @@ static BOOL L_PutDefDiskObject(REG(a0, struct DiskObject *d))
     return put_icon(NULL, d, t);
 }
 
-/* NewDiskObject, as OS 3.2's (iconprobe at 5c27ff1): a BOOLGADGET with
- * RELVERIFY, a picture, the highlight below, a selected picture for a
- * drawer and the trashcan, a drawer window at 50,50 400x100 for a disk, a
- * drawer and the trashcan; no AppIcon. */
-static const UBYTE new_highlight[] = {
-    0, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHCOMP, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHBOX, GFLG_GADGHBOX
-};
-
+/* NewDiskObject, as OS 3.2's (iconprobe at 5c27ff1 and d801676): a
+ * BOOLGADGET with RELVERIFY, an empty Image (no size, no planes) for the
+ * picture and, for a drawer and the trashcan, the selected one, a drawer
+ * window at 50,50 400x100 for a disk, a drawer and the trashcan; no
+ * AppIcon. */
 static struct DiskObject *L_NewDiskObject(REG(d0, LONG type))
 {
     struct ic_icon *icon;
@@ -907,11 +914,11 @@ static struct DiskObject *L_NewDiskObject(REG(d0, LONG type))
     icon->gflags = GFLG_GADGIMAGE | new_highlight[type];
     icon->gactivation = GACT_RELVERIFY;
     icon->gtype = GTYP_BOOLGADGET;
-    icon->planar[0] = builtin_picture(icon, type, 0);
+    icon->planar[0] = ic_own(&env, icon, sizeof(struct ic_planar));
     if (!icon->planar[0])
         goto fail;
     if (new_highlight[type] == GFLG_GADGHIMAGE) {
-        icon->planar[1] = builtin_picture(icon, type, 1);
+        icon->planar[1] = ic_own(&env, icon, sizeof(struct ic_planar));
         if (!icon->planar[1])
             goto fail;
     }
@@ -1155,8 +1162,8 @@ static UBYTE *L_BumpRevision(REG(a0, UBYTE *newname), REG(a1, UBYTE *oldname))
 
 static UBYTE *L_BumpRevisionLength(REG(a0, UBYTE *newname), REG(a1, UBYTE *oldname), REG(d0, ULONG maxlen))
 {
-    ic_bump_revision((char *)newname, (const char *)oldname, maxlen);  /* may leave it, as 3.2 does */
-    return newname;
+    /* too short: left as it was, and NULL, as 3.2 does */
+    return ic_bump_revision((char *)newname, (const char *)oldname, maxlen) ? newname : NULL;
 }
 
 /* ---- the FreeList calls ---- */
@@ -1279,8 +1286,8 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
     b->objects.mlh_Tail = NULL;
     b->objects.mlh_TailPred = (struct MinNode *)&b->objects.mlh_Head;
     b->precision = PRECISION_ICON;
-    b->frameless = FALSE;
-    b->newicons = FALSE;            /* OS 3.2 reads no NewIcons out of the box (iconprobe at 5c27ff1) */
+    b->frameless = TRUE;            /* both on, as 3.2 has them (iconprobe at d801676) */
+    b->newicons = TRUE;             /* 3.2 says so but shows no NewIcon colour picture; we do (ours only) */
     b->coloricons = TRUE;
     b->maxnamelen = 25;
     Base = b;

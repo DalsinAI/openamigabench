@@ -78,10 +78,10 @@ void ic_free(struct ic_env *env, struct ic_icon *icon)
 
 /* FindToolType: the tool type whose name (up to '=' or its end) is name,
  * compared without regard to case. As OS 3.2's (measured, iconprobe at
- * 5c27ff1): spaces before a tool type's name are skipped, name is not
- * trimmed, and name is compared whole, so "a=b" finds "a=b=c" and gives
- * "c". The value after the '=', or the empty string at the end when there
- * is none. */
+ * 5c27ff1 and d801676): spaces before a tool type's name and between it
+ * and its '=' are skipped (tabs are not), name is not trimmed, and name
+ * is compared whole, so "a=b" finds "a=b=c" and gives "c". The value
+ * after the '=', or the empty string at the end when there is none. */
 char *ic_find_tool_type(char **tooltypes, const char *name)
 {
     if (!tooltypes || !name)
@@ -95,7 +95,11 @@ char *ic_find_tool_type(char **tooltypes, const char *name)
             t++;
             n++;
         }
-        if (*n == 0 && (*t == '=' || *t == 0))
+        if (*n)
+            continue;
+        while (*t == ' ')
+            t++;
+        if (*t == '=' || *t == 0)
             return *t == '=' ? t + 1 : t;
     }
     return NULL;
@@ -134,10 +138,11 @@ static int prefix(const char *s, const char *p)
 
 /* BumpRevision, as OS 3.2's (measured, iconprobe at 5c27ff1): "name"
  * becomes "Copy_of_name". A name starting "copy_" (any case) is a copy:
- * the number after it (1 when there are no digits), then "_" and "of_"
- * when they are there, are taken off, and the rest gets "Copy_N+1_of_",
- * or "Copy_of_" when N+1 is 1. So "copy_x_of_a" becomes "Copy_2_of_x_of_a"
- * and "copy_0_of_a" becomes "Copy_of_a".
+ * the number after it (1 when there are no digits; 32 bits, so
+ * 4294967295 + 1 is 0), then spaces, "_" and "of_" when they are there,
+ * are taken off, and the rest gets "Copy_N+1_of_", or "Copy_of_" when N+1
+ * is 1. So "copy_x_of_a" becomes "Copy_2_of_x_of_a", "copy_ 2_of_a"
+ * "Copy_2_of_2_of_a" and "copy_0_of_a" "Copy_of_a".
  * At most maxlen characters and a NUL. When maxlen is under IC_BUMP_MIN
  * (IC_BUMP_MIN_NUMBERED for a numbered copy) newname is left as it was
  * and 0 is returned, as 3.2's BumpRevisionLength does. */
@@ -146,19 +151,21 @@ int ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
     char head[24];
     const char *rest = oldname;
     uint32_t n = 0, i;
-    unsigned long num = 1;
+    uint32_t num = 1;
 
     if (prefix(oldname, "copy_")) {
         const char *p = oldname + 5;
-        unsigned long v = 0;
+        uint32_t v = 0;
         int digits = 0;
-        while (*p >= '0' && *p <= '9' && digits < 9) {
-            v = v * 10 + (unsigned long)(*p++ - '0');
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10 + (uint32_t)(*p++ - '0');
             digits++;
         }
         if (!digits)
             v = 1;
-        else if (*p == '_')
+        while (*p == ' ')
+            p++;
+        if (digits && *p == '_')
             p++;
         if (prefix(p, "of_"))
             p += 3;
@@ -175,10 +182,10 @@ int ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
         if (num != 1) {
             char d[12];
             int k = 0;
-            while (num) {
+            do {
                 d[k++] = (char)('0' + num % 10);
                 num /= 10;
-            }
+            } while (num);
             while (k)
                 head[n++] = d[--k];
             head[n++] = '_';

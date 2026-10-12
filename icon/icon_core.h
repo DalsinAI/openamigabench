@@ -162,8 +162,8 @@ char *ic_own_string(struct ic_env *env, struct ic_icon *icon, const char *s);
 char *ic_find_tool_type(char **tooltypes, const char *name);
 int ic_match_tool_value(const char *typestring, const char *value);
 /* newname gets at most maxlen characters and a NUL (BumpRevision: 30).
- * Below these maxlens 3.2 leaves newname untouched (measured between 4
- * and 13, and 13 and 22; the next probe gives the exact ones): 0. */
+ * Below these maxlens 3.2 leaves newname untouched and returns NULL
+ * (measured at every length, iconprobe at d801676): 0. */
 #define IC_BUMP_MIN          9
 #define IC_BUMP_MIN_NUMBERED 20
 int ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen);

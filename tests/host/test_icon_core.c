@@ -290,6 +290,10 @@ static void test_tooltypes(void)
             { "123456789012345678901234567890", "Copy_of_1234567890123456789012" },
             { "copy_123456789_of_x", "Copy_123456790_of_x" },
             { "", "Copy_of_" },
+            /* iconprobe at d801676 */
+            { "copy_ 2_of_x", "Copy_2_of_2_of_x" },
+            { "copy_1234567890_of_x", "Copy_1234567891_of_x" },
+            { "copy_4294967295_of_x", "Copy_0_of_x" },
         };
         unsigned k;
         for (k = 0; k < sizeof cases / sizeof cases[0]; k++) {
@@ -306,7 +310,10 @@ static void test_tooltypes(void)
     CHECK(ic_bump_revision(newname, "copy_99_of_Disk", 22) == 1 && strcmp(newname, "Copy_100_of_Disk") == 0, "%s", newname);
 
     {
-        char *tt2[] = { "  SPACE=1", "a=b=c", "\tTAB=2", NULL };
+        char *tt2[] = { "  SPACE=1", "a=b=c", "\tTAB=2", " SP AFTER =2", "TRAIL =3", NULL };
+        CHECK(ic_find_tool_type(tt2, "SP AFTER") && strcmp(ic_find_tool_type(tt2, "SP AFTER"), "2") == 0, "space before '='");
+        CHECK(ic_find_tool_type(tt2, "TRAIL") && strcmp(ic_find_tool_type(tt2, "TRAIL"), "3") == 0, "TRAIL");
+        CHECK(ic_find_tool_type(tt2, "TAB") == NULL, "a tab is not skipped");
         CHECK(ic_find_tool_type(tt2, "SPACE") && strcmp(ic_find_tool_type(tt2, "SPACE"), "1") == 0, "leading spaces skipped");
         CHECK(ic_find_tool_type(tt2, "  SPACE") == NULL, "the name is not trimmed");
         CHECK(ic_find_tool_type(tt2, "a=b") && strcmp(ic_find_tool_type(tt2, "a=b"), "c") == 0, "'=' in the name");

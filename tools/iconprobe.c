@@ -30,7 +30,7 @@
 #include <proto/icon.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.2 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.3 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 static struct Library *os_base, *our_base;
@@ -196,6 +196,12 @@ static void colour_pictures(const char *name, struct Library *la, struct DiskObj
     int k;
     ask(la, a, &x);
     ask(lb, b, &y);
+    if (!x.width && y.newicon && lb == our_base) {
+        /* Hyperion's shows no NewIcon colour picture; ours does */
+        extras++;
+        printf("EXTRA %s: a NewIcon, its colour picture ours only\n", name);
+        return;
+    }
     num("colour: mapped", name, x.mapped, y.mapped);
     num("colour: NewIcon", name, x.newicon, y.newicon);
     num("colour: second real", name, x.real2, y.real2);
@@ -212,8 +218,22 @@ static void colour_pictures(const char *name, struct Library *la, struct DiskObj
             bytes(w, name, x.data[k], (ULONG)x.width * x.height, y.data[k], (ULONG)y.width * y.height);
         }
         if (x.size[k] == y.size[k]) {
+            ULONG d0 = diffs;
             sprintf(w, "colour %d: palette", k + 1);
             bytes(w, name, (UBYTE *)x.pal[k], (ULONG)x.size[k] * 3, (UBYTE *)y.pal[k], (ULONG)y.size[k] * 3);
+            if (diffs != d0 && x.pal[k] && y.pal[k]) {
+                /* both palettes, to see what 3.2 did to it */
+                ULONG i, n = (ULONG)x.size[k] * 3;
+                if (n > 48)
+                    n = 48;
+                printf("PALETTE %s %d Hyperion", name, k + 1);
+                for (i = 0; i < n; i++)
+                    printf(" %02x", ((UBYTE *)x.pal[k])[i]);
+                printf("\nPALETTE %s %d ours    ", name, k + 1);
+                for (i = 0; i < n; i++)
+                    printf(" %02x", ((UBYTE *)y.pal[k])[i]);
+                printf("\n");
+            }
         }
     }
 }
@@ -570,6 +590,75 @@ static void globals(const char *temp)
     IconControl(NULL, ICONCTRLA_SetGlobalNewIconsSupport, was[1], TAG_DONE);
 }
 
+static BOOL put_err(struct Library *lib, const char *path, struct DiskObject *d, LONG *err)
+{
+    struct TagItem t[2];
+    t[0].ti_Tag = ICONA_ErrorCode;
+    t[0].ti_Data = (ULONG)err;
+    t[1].ti_Tag = TAG_DONE;
+    *err = 0;
+    IconBase = lib;
+    return PutIconTagList((CONST_STRPTR)path, d, t);
+}
+
+/* NewDiskObject's icon written as it is, by each library: 3.2 refuses it. */
+static void writing_new(const char *temp)
+{
+    LONG type;
+    char pa[256], pb[256];
+    snprintf(pa, sizeof pa, "%s/iconprobe-os", temp);
+    snprintf(pb, sizeof pb, "%s/iconprobe-ours", temp);
+    for (type = WBDISK; type <= WBKICK; type++) {
+        struct DiskObject *a, *b;
+        LONG ea = 0, eb = 0;
+        BOOL oka = FALSE, okb = FALSE;
+        char w[40];
+        IconBase = os_base;
+        a = NewDiskObject(type);
+        IconBase = our_base;
+        b = NewDiskObject(type);
+        if (a)
+            oka = put_err(os_base, pa, a, &ea);
+        if (b)
+            okb = put_err(our_base, pb, b, &eb);
+        sprintf(w, "NewDiskObject %ld written", (long)type);
+        num("written", w, oka, okb);
+        num("write error", w, ea, eb);
+        IconBase = os_base;
+        if (a) FreeDiskObject(a);
+        DeleteDiskObject((CONST_STRPTR)pa);
+        IconBase = our_base;
+        if (b) FreeDiskObject(b);
+        DeleteDiskObject((CONST_STRPTR)pb);
+    }
+}
+
+/* ChangeToSelectedIconColor: Hyperion's answers, to learn its sum; ours
+ * beside them. Printed, not counted. */
+static void selected_colours(void)
+{
+    static const UBYTE cols[][3] = {
+        { 0, 0, 0 }, { 255, 255, 255 }, { 128, 128, 128 }, { 17, 17, 17 }, { 34, 34, 34 }, { 51, 51, 51 },
+        { 68, 68, 68 }, { 85, 85, 85 }, { 102, 102, 102 }, { 119, 119, 119 }, { 136, 136, 136 },
+        { 153, 153, 153 }, { 170, 170, 170 }, { 187, 187, 187 }, { 204, 204, 204 }, { 221, 221, 221 },
+        { 238, 238, 238 }, { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 }, { 255, 255, 0 }, { 1, 2, 3 },
+        { 200, 100, 50 }, { 10, 250, 130 }, { 64, 128, 192 }, { 254, 1, 127 }
+    };
+    ULONG i;
+    for (i = 0; i < sizeof cols / sizeof cols[0]; i++) {
+        struct ColorRegister a, b;
+        a.red = b.red = cols[i][0];
+        a.green = b.green = cols[i][1];
+        a.blue = b.blue = cols[i][2];
+        IconBase = os_base;
+        ChangeToSelectedIconColor(&a);
+        IconBase = our_base;
+        ChangeToSelectedIconColor(&b);
+        printf("SELCOLOUR %u %u %u: Hyperion %u %u %u, ours %u %u %u\n", cols[i][0], cols[i][1], cols[i][2],
+               a.red, a.green, a.blue, b.red, b.green, b.blue);
+    }
+}
+
 /* What PutDiskObject writes for gadget and stack values it is given: one
  * of Hyperion's own objects, changed, written by each library and read
  * back by Hyperion's. */
@@ -590,7 +679,7 @@ static void writing(const char *temp)
         BOOL oka, okb;
         char w[40];
         IconBase = os_base;
-        d = NewDiskObject(k == 1 ? WBDRAWER : WBTOOL);
+        d = GetDefDiskObject(k == 1 ? WBDRAWER : WBTOOL);   /* a real picture */
         if (!d)
             break;
         d->do_Gadget.Activation = acts[k];
@@ -598,11 +687,11 @@ static void writing(const char *temp)
         d->do_Gadget.Flags = gflags[k];
         d->do_Gadget.GadgetType = gtypes[k & 3];
         d->do_Gadget.UserData = (APTR)revs[k & 3];
-        oka = PutDiskObject((CONST_STRPTR)pa, d);
-        IconBase = our_base;
-        okb = PutDiskObject((CONST_STRPTR)pb, d);
+        oka = put_err(os_base, pa, d, &ea);
+        okb = put_err(our_base, pb, d, &eb);
         sprintf(w, "written case %lu", (unsigned long)k);
         num("written", w, oka, okb);
+        num("write error", w, ea, eb);
         if (oka && okb) {
             ra = get(os_base, pa, &ea);
             rb = get(os_base, pb, &eb);
@@ -651,6 +740,8 @@ int main(void)
     defaults();
     globals(temp);
     writing(temp);
+    writing_new(temp);
+    selected_colours();
     if (args[A_DIRS]) {
         char **d;
         for (d = (char **)args[A_DIRS]; *d; d++)
