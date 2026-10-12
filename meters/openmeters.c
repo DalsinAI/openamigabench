@@ -71,8 +71,8 @@
 #include "ogt_theme.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
+#define OPENMETERS_VERSION "0.2.2"
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
@@ -1023,7 +1023,9 @@ static int run(void)
         /* Workbench is being reset (Font prefs' Use, a screen mode): no window, no lock on its screen until it is back */
         switch (wbc_take()) {
         case WBC_CLOSE: close_panel(); wb_down = 1; wbc_closed(); break;
-        case WBC_OPEN: wb_down = 2; break;
+        /* 0.2.2: only when the panel is down; a refused CloseWorkBench and the OpenWorkBench after it say
+         * "open" twice, and the second opened a second, empty panel over the first */
+        case WBC_OPEN: if (wb_down) wb_down = 2; break;
         }
         if (wb_down == 2 && open_panel()) wb_down = 0;
         if (got & SIGBREAKF_CTRL_F) again = 1;  /* told the look changed */
