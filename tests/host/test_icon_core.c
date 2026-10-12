@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "icon_core.h"
 
@@ -344,6 +345,44 @@ static void test_rle(void)
         }
 }
 
+/* Damaged files found in review: each is refused or read, and never hangs
+ * (the alarm turns a hang into a failure). */
+static void test_hostile(const char *dir)
+{
+    char path[512];
+    uint32_t len;
+    uint8_t *buf;
+    snprintf(path, sizeof path, "%s/classic_tool.info", dir);
+    buf = load(path, &len);
+    alarm(10);
+    if (buf) {
+        /* a FORM ICON whose first chunk says 0xfffffff8 bytes */
+        static const uint8_t form[] = { 'F', 'O', 'R', 'M', 0, 0, 0, 20, 'I', 'C', 'O', 'N',
+                                        'F', 'A', 'C', 'E', 0xFF, 0xFF, 0xFF, 0xF8, 1, 2, 3, 4, 5, 6 };
+        uint8_t *x = malloc(len + sizeof form);
+        struct ic_icon *ic = NULL;
+        memcpy(x, buf, len);
+        memcpy(x + len, form, sizeof form);
+        if (ic_read(&env, x, len + (uint32_t)sizeof form, 0, &ic) == IC_OK)
+            ic_free(&env, ic);
+        CHECK(1, "a huge FORM chunk doesn't hang");
+        free(x);
+        free(buf);
+    }
+    {
+        /* zlib("A") cut one to three bytes into its Adler-32 */
+        static const uint8_t z[] = { 0x78, 0x9C, 0x73, 0x04, 0x00, 0x00, 0x42, 0x00, 0x42 };
+        uint8_t out[4];
+        uint32_t got = 0, cut;
+        CHECK(ic_zlib_inflate(z, sizeof z, out, sizeof out, &got) == IC_OK && got == 1 && out[0] == 'A',
+              "zlib A");
+        for (cut = 1; cut <= 4; cut++)
+            CHECK(ic_zlib_inflate(z, (uint32_t)sizeof z - cut, out, sizeof out, &got) != IC_OK,
+                  "zlib with %u bytes of its Adler-32 missing is refused", cut);
+    }
+    alarm(0);
+}
+
 int main(int argc, char **argv)
 {
     char path[512], name[256];
@@ -374,6 +413,7 @@ int main(int argc, char **argv)
         CHECK(ic_read(&env, junk, sizeof junk, 0, &x) == IC_ERR_FORMAT, "a wrong magic");
         CHECK(ic_read(&env, junk, 1, 0, &x) == IC_ERR_FORMAT, "one byte");
     }
+    test_hostile(argv[1]);
     printf(failures ? "%d FAILED\n" : "all passed\n", failures);
     return failures != 0;
 }

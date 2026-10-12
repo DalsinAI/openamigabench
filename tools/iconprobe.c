@@ -30,7 +30,7 @@
 #include <proto/icon.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.3 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.4 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 static struct Library *os_base, *our_base;
@@ -168,7 +168,8 @@ static void fields(const char *name, struct DiskObject *a, struct DiskObject *b)
 
 /* IconControlA's questions, asked of each library about its own object. */
 struct pictures {
-    LONG ok, width, height, size[2], trans[2], frameless, aspect, mapped, newicon, real2;
+    LONG ok, width, height, size[2], trans[2], frameless, mapped, newicon, real2, native;
+    UBYTE aspect[4];
     UBYTE *data[2];
     struct ColorRegister *pal[2];
 };
@@ -176,6 +177,7 @@ struct pictures {
 static void ask(struct Library *lib, struct DiskObject *d, struct pictures *p)
 {
     memset(p, 0, sizeof *p);
+    memset(p->aspect, 0x55, sizeof p->aspect);
     IconBase = lib;
     p->ok = IconControl(d,
         ICONCTRLA_GetWidth, &p->width, ICONCTRLA_GetHeight, &p->height,
@@ -185,6 +187,7 @@ static void ask(struct Library *lib, struct DiskObject *d, struct pictures *p)
         ICONCTRLA_GetPalette1, &p->pal[0], ICONCTRLA_GetPalette2, &p->pal[1],
         ICONCTRLA_GetFrameless, &p->frameless, ICONCTRLA_IsPaletteMapped, &p->mapped,
         ICONCTRLA_IsNewIcon, &p->newicon, ICONCTRLA_HasRealImage2, &p->real2,
+        ICONCTRLA_IsNativeIcon, &p->native, ICONCTRLA_GetAspectRatio, &p->aspect[0],
         TAG_DONE);
 }
 
@@ -206,6 +209,10 @@ static void colour_pictures(const char *name, struct Library *la, struct DiskObj
     num("colour: NewIcon", name, x.newicon, y.newicon);
     num("colour: second real", name, x.real2, y.real2);
     num("colour: frameless", name, x.frameless, y.frameless);
+    num("colour: native", name, x.native, y.native);
+    /* a UBYTE *: the bytes after it must be left alone */
+    num("colour: aspect bytes", name, (LONG)x.aspect[0] << 24 | x.aspect[1] << 16 | x.aspect[2] << 8 | x.aspect[3],
+        (LONG)y.aspect[0] << 24 | y.aspect[1] << 16 | y.aspect[2] << 8 | y.aspect[3]);
     num("colour: size", name, x.width << 16 | x.height, y.width << 16 | y.height);
     for (k = 0; k < 2; k++) {
         char w[40];
@@ -294,7 +301,7 @@ static void one_icon(const char *name, const char *temp)
 {
     LONG ea, eb;
     struct DiskObject *a = get(os_base, name, &ea), *b = get(our_base, name, &eb);
-    if (!a && b) {
+    if (!a && b && strstr(name, "/png_")) {
         /* one Hyperion's can't read (PNG icons): ours only, not a difference */
         extras++;
         printf("EXTRA %s: Hyperion can't read it (error %ld), ours can\n", name, (long)ea);
@@ -654,8 +661,12 @@ static void selected_colours(void)
         ChangeToSelectedIconColor(&a);
         IconBase = our_base;
         ChangeToSelectedIconColor(&b);
-        printf("SELCOLOUR %u %u %u: Hyperion %u %u %u, ours %u %u %u\n", cols[i][0], cols[i][1], cols[i][2],
-               a.red, a.green, a.blue, b.red, b.green, b.blue);
+        {
+            char w[32];
+            sprintf(w, "%u %u %u", cols[i][0], cols[i][1], cols[i][2]);
+            num(w, "ChangeToSelectedIconColor", (LONG)a.red << 16 | a.green << 8 | a.blue,
+                (LONG)b.red << 16 | b.green << 8 | b.blue);
+        }
     }
 }
 
@@ -708,6 +719,158 @@ static void writing(const char *temp)
     }
 }
 
+/* What the review of #17 asked about, measured: the named default with
+ * its type to fall back on, GetDiskObjectNew(NULL), DupDiskObjectA's
+ * tags, a name too long to write, and colour icons switched off. */
+static void review_cases(const char *temp)
+{
+    static const char *const names[] = { "Harddisk", "RAM", "NoSuchName", NULL };
+    int i;
+    for (i = 0; names[i]; i++) {
+        struct DiskObject *a, *b;
+        LONG ea = 0, eb = 0;
+        struct TagItem t[4];
+        char w[48];
+        t[0].ti_Tag = ICONGETA_GetDefaultName;
+        t[0].ti_Data = (ULONG)names[i];
+        t[1].ti_Tag = ICONGETA_GetDefaultType;
+        t[1].ti_Data = WBDISK;
+        t[2].ti_Tag = ICONA_ErrorCode;
+        t[2].ti_Data = (ULONG)&ea;
+        t[3].ti_Tag = TAG_DONE;
+        IconBase = os_base;
+        a = GetIconTagList(NULL, t);
+        t[2].ti_Data = (ULONG)&eb;
+        IconBase = our_base;
+        b = GetIconTagList(NULL, t);
+        sprintf(w, "default name %s, type disk", names[i]);
+        num("made", w, a != NULL, b != NULL);
+        num("error", w, ea, eb);
+        if (a && b)
+            fields(w, a, b);
+        IconBase = os_base;
+        if (a) FreeDiskObject(a);
+        IconBase = our_base;
+        if (b) FreeDiskObject(b);
+    }
+    {
+        struct DiskObject *a, *b;
+        IconBase = os_base;
+        a = GetDiskObjectNew(NULL);
+        IconBase = our_base;
+        b = GetDiskObjectNew(NULL);
+        num("made", "GetDiskObjectNew(NULL)", a != NULL, b != NULL);
+        if (a && b)
+            fields("GetDiskObjectNew(NULL)", a, b);
+        IconBase = os_base;
+        if (a) FreeDiskObject(a);
+        IconBase = our_base;
+        if (b) FreeDiskObject(b);
+    }
+    {
+        static const ULONG dups[] = { ICONDUPA_DuplicateDrawerData, ICONDUPA_DuplicateDefaultTool,
+                                      ICONDUPA_DuplicateToolTypes, ICONDUPA_DuplicateToolWindow,
+                                      ICONDUPA_DuplicateImageData, ICONDUPA_DuplicateImages };
+        ULONG k;
+        LONG e;
+        struct DiskObject *srca = get(os_base, "SYS:Storage/OpenBench-Icons/classic_drawer", &e);
+        struct DiskObject *srcb = get(our_base, "SYS:Storage/OpenBench-Icons/classic_drawer", &e);
+        for (k = 0; srca && srcb && k < sizeof dups / sizeof dups[0]; k++) {
+            struct TagItem t[2];
+            struct DiskObject *a, *b;
+            char w[40];
+            t[0].ti_Tag = dups[k];
+            t[0].ti_Data = FALSE;
+            t[1].ti_Tag = TAG_DONE;
+            IconBase = os_base;
+            a = DupDiskObjectA(srca, t);
+            IconBase = our_base;
+            b = DupDiskObjectA(srcb, t);
+            sprintf(w, "DupDiskObjectA %lx FALSE", (unsigned long)(dups[k] & 0xFFFF));
+            num("made", w, a != NULL, b != NULL);
+            if (a && b) {
+                struct Image *ia = a->do_Gadget.GadgetRender, *ib = b->do_Gadget.GadgetRender;
+                num("drawer data", w, a->do_DrawerData != NULL, b->do_DrawerData != NULL);
+                num("default tool", w, a->do_DefaultTool != NULL, b->do_DefaultTool != NULL);
+                num("tool types", w, a->do_ToolTypes != NULL, b->do_ToolTypes != NULL);
+                num("tool window", w, a->do_ToolWindow != NULL, b->do_ToolWindow != NULL);
+                num("picture", w, ia != NULL, ib != NULL);
+                if (ia && ib) {
+                    num("picture data", w, ia->ImageData != NULL, ib->ImageData != NULL);
+                    num("picture data shared", w, ia->ImageData == ((struct Image *)srca->do_Gadget.GadgetRender)->ImageData,
+                        ib->ImageData == ((struct Image *)srcb->do_Gadget.GadgetRender)->ImageData);
+                }
+            }
+            IconBase = os_base;
+            if (a) FreeDiskObject(a);
+            IconBase = our_base;
+            if (b) FreeDiskObject(b);
+        }
+        IconBase = os_base;
+        if (srca) FreeDiskObject(srca);
+        IconBase = our_base;
+        if (srcb) FreeDiskObject(srcb);
+    }
+    {
+        /* a name past the global maximum (25): written? what error? */
+        char pa[256], pb[256];
+        LONG ea = -1, eb = -1, maxa = 0, maxb = 0;
+        BOOL oka, okb;
+        struct DiskObject *d;
+        BPTR l;
+        snprintf(pa, sizeof pa, "%s/iconprobe-os-a-very-long-name-indeed", temp);
+        snprintf(pb, sizeof pb, "%s/iconprobe-ours-a-very-long-name-indeed", temp);
+        IconBase = os_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalMaxNameLength, &maxa, TAG_DONE);
+        IconBase = our_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalMaxNameLength, &maxb, TAG_DONE);
+        num("global max name length", "long name", maxa, maxb);
+        IconBase = os_base;
+        d = GetDefDiskObject(WBTOOL);
+        if (d) {
+            oka = put_err(os_base, pa, d, &ea);
+            okb = put_err(our_base, pb, d, &eb);
+            num("put says", "long name", oka, okb);
+            num("put error", "long name", ea, eb);
+            strncat(pa, ".info", sizeof pa - strlen(pa) - 1);
+            strncat(pb, ".info", sizeof pb - strlen(pb) - 1);
+            l = Lock((CONST_STRPTR)pa, SHARED_LOCK);
+            oka = l != 0;
+            if (l) UnLock(l);
+            l = Lock((CONST_STRPTR)pb, SHARED_LOCK);
+            okb = l != 0;
+            if (l) UnLock(l);
+            num("file there", "long name", oka, okb);
+            DeleteFile((CONST_STRPTR)pa);
+            DeleteFile((CONST_STRPTR)pb);
+            IconBase = os_base;
+            FreeDiskObject(d);
+        }
+    }
+    {
+        /* colour icons off: a GlowIcon's colour picture? */
+        LONG was[2] = { 1, 1 }, e;
+        struct DiskObject *a, *b;
+        IconBase = os_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalColorIconSupport, &was[0], ICONCTRLA_SetGlobalColorIconSupport, FALSE,
+                    TAG_DONE);
+        IconBase = our_base;
+        IconControl(NULL, ICONCTRLA_GetGlobalColorIconSupport, &was[1], ICONCTRLA_SetGlobalColorIconSupport, FALSE,
+                    TAG_DONE);
+        a = get(os_base, "SYS:Storage/OpenBench-Icons/glow_19", &e);
+        b = get(our_base, "SYS:Storage/OpenBench-Icons/glow_19", &e);
+        num("read", "colour icons off", a != NULL, b != NULL);
+        if (a && b)
+            colour_pictures("colour icons off", os_base, a, our_base, b);
+        IconBase = os_base;
+        if (a) FreeDiskObject(a);
+        IconControl(NULL, ICONCTRLA_SetGlobalColorIconSupport, was[0], TAG_DONE);
+        IconBase = our_base;
+        if (b) FreeDiskObject(b);
+        IconControl(NULL, ICONCTRLA_SetGlobalColorIconSupport, was[1], TAG_DONE);
+    }
+}
+
 int main(void)
 {
     struct RDArgs *rd;
@@ -742,6 +905,7 @@ int main(void)
     writing(temp);
     writing_new(temp);
     selected_colours();
+    review_cases(temp);
     if (args[A_DIRS]) {
         char **d;
         for (d = (char **)args[A_DIRS]; *d; d++)

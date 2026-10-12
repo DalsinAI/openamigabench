@@ -384,6 +384,21 @@ def main(out_dir):
         want.append("pal1 %d %d %d %d %08x -" % (w, h, 0, -1, crc(p1)))
         save(name, data, want, exact=True)
 
+    # 5b. the largest OS 3.5 picture, 256x256 of noise in 256 colours: too
+    # big to run-length code in IMAG's 16-bit size, so stored uncoded
+    w = h = 256
+    o = {"type": 3, "tool": None, "tooltypes": None, "x": NO_POS, "y": NO_POS, "stack": 4096,
+         "planar": [(16, 8, 2, picture(16, 8, 4))]}
+    p0 = bytes(R.randrange(256) for _ in range(w * h))
+    pal = bytes(R.randrange(256) for _ in range(768))
+    body0 = struct.pack(">BBBBBBHH", 0, 255, 2, 0, 0, 8, len(p0) - 1, len(pal) - 1) + p0 + pal
+    form = b"ICON" + chunk(b"FACE", struct.pack(">BBBBH", w - 1, h - 1, 0, 0, 767)) + chunk(b"IMAG", body0)
+    data = classic(o) + b"FORM" + struct.pack(">I", len(form)) + form
+    want = want_fields(o, 0x03)
+    want.append("face %d %d frameless 0 aspect 0" % (w, h))
+    want.append("pal0 %d %d %d %d %08x %08x" % (w, h, 256, -1, crc(p0), crc(pal)))
+    save("glow_big", data, want, exact=True)
+
     # 6. AROS: ARGB chunks after the IMAGs
     w, h = 40, 32
     o = {"type": 3, "tool": None, "tooltypes": None, "x": NO_POS, "y": NO_POS, "stack": 4096,

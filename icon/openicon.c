@@ -38,6 +38,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/utility.h>
+#include <proto/wb.h>
 
 #include "icon_core.h"
 
@@ -399,9 +400,30 @@ static struct ic_icon *icon_from_object(struct DiskObject *d, ULONG drop)
             icon->pnglen[0] = r->pnglen[0];
             icon->pnglen[1] = r->pnglen[1];
         }
-        /* a PNG icon's classic picture is ours, made from it: not written */
-        if (r->formats & IC_FMT_PNG)
+        /* a PNG icon's classic picture is ours, made from it: not written,
+         * unless the PNG is dropped (then it's all there is) */
+        if ((r->formats & IC_FMT_PNG) && !(drop & IC_FMT_PNG))
             icon->planar[0] = icon->planar[1] = NULL;
+    }
+    /* ICONPUTA_DropNewIconToolTypes: the IM1=/IM2= lines and their marker
+     * left out */
+    if ((drop & IC_FMT_NEWICONS) && icon->tooltypes) {
+        char **tt = icon->tooltypes, **keep;
+        ULONG n = 0, k = 0;
+        while (tt[n])
+            n++;
+        keep = ic_own(&env, icon, (n + 1) * sizeof *keep);
+        if (!keep)
+            goto fail;
+        for (n = 0; tt[n]; n++) {
+            const char *t = tt[n];
+            if ((t[0] == 'I' && t[1] == 'M' && (t[2] == '1' || t[2] == '2') && t[3] == '=') ||
+                (t[0] == '*' && t[1] == '*' && t[2] == '*' && t[3] == ' '))
+                continue;
+            keep[k++] = tt[n];
+        }
+        keep[k] = NULL;
+        icon->tooltypes = keep;
     }
     return icon;
 fail:
@@ -481,6 +503,13 @@ static struct DiskObject *load(const char *path, ULONG flags, LONG *err)
         *err = core_error(r);
         return NULL;
     }
+    /* colour icons switched off (ICONCTRLA_SetGlobalColorIconSupport):
+     * only the classic pictures are handed out; a PNG icon keeps its own,
+     * having no other */
+    if (!Base->coloricons && !(icon->formats & IC_FMT_PNG)) {
+        icon->pal[0] = icon->pal[1] = NULL;
+        icon->argb[0] = icon->argb[1] = NULL;
+    }
     o = make_object(icon);
     if (!o) {
         ic_free(&env, icon);
@@ -553,9 +582,23 @@ static BOOL save(const char *path, struct DiskObject *d, ULONG drop, LONG *err)
 
 /* ---- default icons ---- */
 
+/* ENV:Sys/def_<name>.info: a type's default, or a named one (Harddisk...) */
 static const char *const def_names[] = {
-    NULL, "def_disk", "def_drawer", "def_tool", "def_project", "def_trashcan", "def_device", "def_kick", "def_appicon"
+    NULL, "disk", "drawer", "tool", "project", "trashcan", "device", "kick", "appicon"
 };
+
+/* "ENV:Sys/def_" name ".info", in a new AllocVec'd string. */
+static char *def_path(const char *n)
+{
+    ULONG k = slen(n);
+    char *path = AllocVec(k + 18, MEMF_ANY);
+    if (path) {
+        CopyMem("ENV:Sys/def_", path, 12);
+        CopyMem((APTR)n, path + 12, k);
+        CopyMem(".info", path + 12 + k, 6);
+    }
+    return path;
+}
 
 /* A built-in picture: a framed box in the 4 Workbench colours, its kind
  * drawn inside (a drawer's handle, a tool's bar, a page's lines). Our own
@@ -655,36 +698,44 @@ static struct DiskObject *builtin(LONG type)
 /* ENV:Sys/def_<name>.info, else the built-in one. */
 static struct DiskObject *default_icon(LONG type, CONST_STRPTR name, LONG *err)
 {
-    char path[64];
-    const char *n = (const char *)name;
-    struct DiskObject *d;
-    ULONG i = 0, k;
-    if (!n) {
-        if (type < WBDISK || type > WBAPPICON) {
-            *err = ERROR_REQUIRED_ARG_MISSING;
+    struct DiskObject *d = NULL;
+    char *path;
+    /* a named default first (ICONGETA_GetDefaultName); missing, the type's */
+    if (name) {
+        path = def_path((const char *)name);
+        if (!path) {
+            *err = ERROR_NO_FREE_STORE;
             return NULL;
         }
-        if (type == WBAPPICON) {        /* 3.2 has no default AppIcon */
-            *err = ERROR_OBJECT_NOT_FOUND;
-            return NULL;
-        }
-        n = def_names[type];
+        d = load(path, 0, err);
+        FreeVec(path);
+        if (d || !type)
+            goto done;
     }
-    for (k = 0; "ENV:Sys/"[k]; k++)
-        path[i++] = "ENV:Sys/"[k];
-    for (k = 0; n[k] && i < sizeof path - 6; k++)
-        path[i++] = n[k];
-    CopyMem(".info", path + i, 6);
+    if (type < WBDISK || type > WBAPPICON) {
+        *err = ERROR_REQUIRED_ARG_MISSING;
+        return NULL;
+    }
+    if (type == WBAPPICON) {            /* 3.2 has no default AppIcon */
+        *err = ERROR_OBJECT_NOT_FOUND;
+        return NULL;
+    }
+    path = def_path(def_names[type]);
+    if (!path) {
+        *err = ERROR_NO_FREE_STORE;
+        return NULL;
+    }
     d = load(path, 0, err);
-    if (d) {
-        d->do_CurrentX = d->do_CurrentY = (LONG)NO_ICON_POSITION;   /* as 3.2's */
-        return d;
-    }
-    if (!name) {
+    FreeVec(path);
+    if (!d) {
         d = builtin(type);
         if (!d)
             *err = ERROR_NO_FREE_STORE;
+        return d;
     }
+done:
+    if (d)
+        d->do_CurrentX = d->do_CurrentY = (LONG)NO_ICON_POSITION;   /* as 3.2's */
     return d;
 }
 
@@ -792,6 +843,27 @@ static struct DiskObject *get_icon(CONST_STRPTR name, struct TagItem *tags)
     return d;
 }
 
+/* Tell a running Workbench that name's icon (at path) was written:
+ * UpdateWorkbench, as PutDiskObject does. Nothing when there's no
+ * workbench.library 44. */
+static void notify_workbench(const char *path, CONST_STRPTR name)
+{
+    struct Library *WorkbenchBase = OpenLibrary((CONST_STRPTR)"workbench.library", 44);
+    BPTR lock, parent;
+    if (!WorkbenchBase)
+        return;
+    lock = Lock((CONST_STRPTR)path, SHARED_LOCK);
+    if (lock) {
+        parent = ParentDir(lock);
+        UnLock(lock);
+        if (parent) {
+            UpdateWorkbench(FilePart(name), parent, UPDATEWB_ObjectAdded);
+            UnLock(parent);
+        }
+    }
+    CloseLibrary(WorkbenchBase);
+}
+
 static BOOL put_icon(CONST_STRPTR name, struct DiskObject *d, struct TagItem *tags)
 {
     LONG err = 0, *errp = (LONG *)GetTagData(ICONA_ErrorCode, 0, tags);
@@ -804,24 +876,27 @@ static BOOL put_icon(CONST_STRPTR name, struct DiskObject *d, struct TagItem *ta
     if (GetTagData(ICONPUTA_DropPlanarIconImage, FALSE, tags))
         drop |= IC_FMT_CLASSIC;
     if (GetTagData(ICONPUTA_DropChunkyIconImage, FALSE, tags))
-        drop |= IC_FMT_OS35 | IC_FMT_ARGB;
+        drop |= IC_FMT_OS35 | IC_FMT_ARGB | IC_FMT_PNG;
+    if (GetTagData(ICONPUTA_DropNewIconToolTypes, FALSE, tags))
+        drop |= IC_FMT_NEWICONS;
     if (!d) {
         err = ERROR_REQUIRED_ARG_MISSING;
     } else if (deftype || defname) {
         const char *n = defname ? (const char *)defname
                         : (deftype >= WBDISK && deftype <= WBAPPICON ? def_names[deftype] : NULL);
-        if (n) {
-            ULONG k = slen(n);
-            path = AllocVec(k + 14, MEMF_ANY);
-            if (path) {
-                CopyMem("ENV:Sys/", path, 8);
-                CopyMem((APTR)n, path + 8, k);
-                CopyMem(".info", path + 8 + k, 6);
-            }
-        } else {
+        if (n)
+            path = def_path(n);
+        else {
             err = ERROR_REQUIRED_ARG_MISSING;
         }
     } else if (name) {
+        /* a name too long for its .info: success, nothing written, and
+         * ERROR_TOO_MANY_LEVELS, so no file is overwritten by a cut name */
+        if (slen((const char *)FilePart(name)) > (ULONG)Base->maxnamelen) {
+            if (errp)
+                *errp = ERROR_TOO_MANY_LEVELS;
+            return TRUE;
+        }
         path = info_name(name);
     } else {
         err = ERROR_REQUIRED_ARG_MISSING;
@@ -843,12 +918,16 @@ static BOOL put_icon(CONST_STRPTR name, struct DiskObject *d, struct TagItem *ta
                 Remove((struct Node *)&((struct OIObject *)old)->node);
                 ReleaseSemaphore(&Base->lock);
                 free_object((struct OIObject *)old);
+            } else if (e2 == ERROR_OBJECT_NOT_FOUND) {
+                ok = save(path, d, drop, &err);     /* no icon yet: the whole one */
             } else {
-                ok = save(path, d, drop, &err);
+                err = e2;                           /* never replace one we can't read */
             }
         } else {
             ok = save(path, d, drop, &err);
         }
+        if (ok && name && !(deftype || defname) && GetTagData(ICONPUTA_NotifyWorkbench, FALSE, tags))
+            notify_workbench(path, name);
         FreeVec(path);
     } else if (!err) {
         err = ERROR_NO_FREE_STORE;
@@ -878,6 +957,8 @@ static struct DiskObject *L_GetDiskObject(REG(a0, CONST_STRPTR name))
 static struct DiskObject *L_GetDiskObjectNew(REG(a0, CONST_STRPTR name))
 {
     struct TagItem t[2];
+    if (!name)                      /* "allocated for you", for AddAppIcon: a project's default */
+        return default_icon(WBPROJECT, NULL, &(LONG){ 0 });
     t[0].ti_Tag = ICONGETA_FailIfUnavailable;
     t[0].ti_Data = FALSE;
     t[1].ti_Tag = TAG_DONE;
@@ -886,7 +967,11 @@ static struct DiskObject *L_GetDiskObjectNew(REG(a0, CONST_STRPTR name))
 
 static BOOL L_PutDiskObject(REG(a0, CONST_STRPTR name), REG(a1, struct DiskObject *d))
 {
-    return put_icon(name, d, NULL);
+    struct TagItem t[2];
+    t[0].ti_Tag = ICONPUTA_NotifyWorkbench;     /* PutDiskObject tells Workbench */
+    t[0].ti_Data = TRUE;
+    t[1].ti_Tag = TAG_DONE;
+    return put_icon(name, d, t);
 }
 
 static BOOL L_DeleteDiskObject(REG(a0, CONST_STRPTR name))
@@ -1027,6 +1112,18 @@ static struct DiskObject *L_DupDiskObjectA(REG(a0, struct DiskObject *d), REG(a1
             *errp = ERROR_NO_FREE_STORE;
         return NULL;
     }
+    /* what wasn't asked for is NULL (DupDiskObjectA's tags, all TRUE
+     * by default) */
+    if (!GetTagData(ICONDUPA_DuplicateDrawerData, TRUE, tags))
+        o->dobj.do_DrawerData = NULL;
+    if (!GetTagData(ICONDUPA_DuplicateDefaultTool, TRUE, tags))
+        o->dobj.do_DefaultTool = NULL;
+    if (!GetTagData(ICONDUPA_DuplicateToolTypes, TRUE, tags))
+        o->dobj.do_ToolTypes = NULL;
+    if (!GetTagData(ICONDUPA_DuplicateToolWindow, TRUE, tags))
+        o->dobj.do_ToolWindow = NULL;
+    if (!GetTagData(ICONDUPA_DuplicateImageData, TRUE, tags))
+        o->image[0].ImageData = o->image[1].ImageData = NULL;
     if (errp)
         *errp = 0;
     return &o->dobj;
@@ -1127,11 +1224,11 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
             case ICONCTRLA_GetWidth: *lp = ic->pal[0] ? ic->pal[0]->width : 0; break;
             case ICONCTRLA_GetHeight: *lp = ic->pal[0] ? ic->pal[0]->height : 0; break;
             case ICONCTRLA_GetFrameless: *lp = ic->frameless; break;
-            case ICONCTRLA_GetAspectRatio: *lp = ic->aspect; break;
+            case ICONCTRLA_GetAspectRatio: *(UBYTE *)t->ti_Data = ic->aspect; break;   /* a UBYTE * */
             case ICONCTRLA_IsPaletteMapped: *lp = ic->pal[0] != NULL; break;
             case ICONCTRLA_IsNewIcon: *lp = (ic->formats & IC_FMT_NEWICONS) != 0; break;
             case ICONCTRLA_HasRealImage2: *lp = ic->pal[1] != NULL; break;
-            case ICONCTRLA_IsNativeIcon: *lp = FALSE; break;
+            case ICONCTRLA_IsNativeIcon: *lp = TRUE; break;    /* one of ours (is_ours); the probe checks 3.2 */
             case ICONCTRLA_GetScreen: *(struct Screen **)t->ti_Data = NULL; break;
             default:
                 ok = FALSE;         /* step R3 */
@@ -1241,11 +1338,17 @@ static BOOL L_AddFreeList(REG(a0, struct FreeList *fl), REG(a1, APTR mem), REG(a
 static void L_FreeFreeList(REG(a0, struct FreeList *fl))
 {
     struct MemList *ml;
+    struct List all;
     if (!fl)
         return;
-    /* the FreeList may itself be in the list (GetIcon's), so its head is
-     * read before anything is freed */
-    while ((ml = (struct MemList *)RemHead(&fl->fl_MemList)) != NULL) {
+    /* the FreeList may itself be one of its allocations (GetIcon's), so
+     * every MemList is moved off it before anything is freed */
+    all.lh_Head = (struct Node *)&all.lh_Tail;
+    all.lh_Tail = NULL;
+    all.lh_TailPred = (struct Node *)&all.lh_Head;
+    while ((ml = (struct MemList *)RemHead(&fl->fl_MemList)) != NULL)
+        AddTail(&all, (struct Node *)ml);
+    while ((ml = (struct MemList *)RemHead(&all)) != NULL) {
         UWORD i;
         struct MemEntry *me = entries(ml);
         for (i = 0; i < ml->ml_NumEntries; i++)

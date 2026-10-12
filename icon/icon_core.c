@@ -485,7 +485,8 @@ static int run_zlib(struct inflate_state *s, const uint8_t *src, uint32_t srclen
     if (r != IC_OK)
         return r;
     used = 2 + s->b.pos;
-    if (used + 4 <= srclen && be32(src + used) != adler32(dst, s->out))
+    /* RFC 1950: the Adler-32 must be there, and right */
+    if (used + 4 > srclen || be32(src + used) != adler32(dst, s->out))
         return IC_ERR_DATA;
     return IC_OK;
 }
@@ -816,6 +817,8 @@ int ic_png_decode(struct ic_env *env, struct ic_icon *owner, const uint8_t *png,
             pi.depth = body[8];
             pi.ctype = body[9];
             pi.interlace = body[12];
+            if (body[10] != 0 || body[11] != 0)     /* compression and filter method 0 only */
+                return IC_ERR_FORMAT;
         } else if (is_id(png + pos + 4, "PLTE")) {
             pi.plte = body;
             pi.plte_n = size / 3;
@@ -995,10 +998,11 @@ static int read_planar(struct ic_env *env, struct ic_icon *icon, const uint8_t *
 
 static int read_form(struct ic_env *env, struct ic_icon *icon, const uint8_t *f, uint32_t flen, uint32_t flags)
 {
-    uint32_t p = 12, end = 8 + be32(f + 4), w = 0, h = 0;
+    uint32_t p = 12, end, w = 0, h = 0;
     int nimag = 0, nargb = 0;
-    if (end > flen)
-        end = flen;
+    if (flen < 12)
+        return IC_OK;
+    end = be32(f + 4) > flen - 8 ? flen : 8 + be32(f + 4);
     while (p + 8 <= end) {
         uint32_t size = be32(f + p + 4);
         const uint8_t *body = f + p + 8;
@@ -1075,7 +1079,12 @@ static int read_form(struct ic_env *env, struct ic_icon *icon, const uint8_t *f,
             }
             nargb++;
         }
-        p += 8 + size + (size & 1);
+        /* a chunk running past the FORM ends it (and can't wrap p round) */
+        if (size > end - p - 8)
+            break;
+        p += 8 + size;
+        if (size & 1)
+            p++;
     }
     return IC_OK;
 }
@@ -1391,15 +1400,18 @@ static int read_png(struct ic_env *env, struct ic_icon *icon, const uint8_t *buf
                     case IC_ATTR_FRAMELESS: icon->frameless = v ? 1 : 0; break;
                     default: break;
                     }
-                    if (tag == IC_ATTR_DRAWERFLAGS || tag == IC_ATTR_VIEWMODES || tag == IC_ATTR_DD_CURRENTX ||
+                    if (tag == IC_ATTR_DRAWERFLAGS || tag == IC_ATTR_DRAWERFLAGS2 || tag == IC_ATTR_DRAWERFLAGS3 ||
+                        tag == IC_ATTR_VIEWMODES || tag == IC_ATTR_VIEWMODES2 || tag == IC_ATTR_DD_CURRENTX ||
                         tag == IC_ATTR_DD_CURRENTY) {
                         if (!d) {
                             d = ic_own(env, icon, (uint32_t)sizeof *d);
                             if (!d)
                                 return IC_ERR_NOMEM;
                         }
-                        if (tag == IC_ATTR_DRAWERFLAGS) d->flags = v;
-                        else if (tag == IC_ATTR_VIEWMODES) d->viewmodes = (uint16_t)v;
+                        if (tag == IC_ATTR_DRAWERFLAGS || tag == IC_ATTR_DRAWERFLAGS2 || tag == IC_ATTR_DRAWERFLAGS3)
+                            d->flags = v;
+                        else if (tag == IC_ATTR_VIEWMODES || tag == IC_ATTR_VIEWMODES2)
+                            d->viewmodes = (uint16_t)v;
                         else if (tag == IC_ATTR_DD_CURRENTX) d->currentx = (int32_t)v;
                         else d->currenty = (int32_t)v;
                     }
@@ -1508,13 +1520,18 @@ static void write_form(struct wr *w, const struct ic_icon *icon)
     w16(w, maxpal ? maxpal - 1 : 0);
     for (k = 0; k < 2; k++) {
         const struct ic_palpic *p = icon->pal[k];
-        uint32_t ncol, isz, psz = 0, csize, n = (uint32_t)p0->width * p0->height;
+        uint32_t ncol, isz, psz = 0, csize, raw, n = (uint32_t)p0->width * p0->height;
         unsigned bits;
         if (!p)
             continue;
         ncol = p->ncolours ? p->ncolours : ncol0;
         bits = bits_for(ncol ? ncol : 2);
         isz = ic_rle_pack(p->pixels, n, bits, NULL, 0);
+        /* IMAG keeps size-1 in 16 bits: past that, the pixels go uncoded
+         * (256x256 at most, so 65536 bytes fits) */
+        raw = isz > 65536;
+        if (raw)
+            isz = n;
         if (p->ncolours)
             psz = ic_rle_pack(p->palette, p->ncolours * 3u, 8, NULL, 0);
         csize = 10 + isz + psz;
@@ -1523,13 +1540,17 @@ static void write_form(struct wr *w, const struct ic_icon *icon)
         w8(w, p->transparent >= 0 ? (uint32_t)p->transparent : 0);
         w8(w, ncol ? ncol - 1 : 0);
         w8(w, (p->transparent >= 0 ? 1u : 0u) | (p->ncolours ? 2u : 0u));
-        w8(w, 1);                   /* the image run-length coded */
+        w8(w, raw ? 0 : 1);         /* the image run-length coded, or not */
         w8(w, p->ncolours ? 1 : 0); /* and the palette */
-        w8(w, bits);
+        w8(w, raw ? 8 : bits);
         w16(w, isz - 1);
         w16(w, psz ? psz - 1 : 0);
-        if (w->out && w->pos + isz <= w->cap)
-            ic_rle_pack(p->pixels, n, bits, w->out + w->pos, isz);
+        if (w->out && w->pos + isz <= w->cap) {
+            if (raw)
+                ic_copy(w->out + w->pos, p->pixels, n);
+            else
+                ic_rle_pack(p->pixels, n, bits, w->out + w->pos, isz);
+        }
         w->pos += isz;
         if (psz) {
             if (w->out && w->pos + psz <= w->cap)
