@@ -12,9 +12,10 @@
  * writing, deleting and freeing every format, default icons,
  * GetIconTagList, PutIconTagList, DupDiskObjectA, and IconControlA's
  * global settings and its questions about an icon's pictures.
- * Step R3: drawing (DrawIconStateA), GetIconRectangleA, LayoutIconA,
- * ChangeToSelectedIconColor, IconControlA's setters, the identify hook
- * being called, masks. Until then those fail as an empty call would.
+ * Step R3 (under way): LayoutIconA, GetIconRectangleA and DrawIconStateA,
+ * measured against 3.2 by iconprobe's drawing cases. Still to come in
+ * R3: IconControlA's setters, the identify hook being called, masks, and
+ * the pre-2.0 GetIcon.
  *
  * Every DiskObject we hand out is one of ours (a struct OIObject), listed
  * under the library's semaphore, so a call is never made on memory we
@@ -39,6 +40,12 @@
 #include <proto/dos.h>
 #include <proto/utility.h>
 #include <proto/wb.h>
+#include <proto/graphics.h>
+#include <proto/intuition.h>
+#include <graphics/gfxmacros.h>
+#include <graphics/rastport.h>
+#include <intuition/imageclass.h>
+#include <intuition/screens.h>
 
 #include "icon_core.h"
 
@@ -54,7 +61,7 @@
 __asm("\t.text\n\t.globl _oi_start\n_oi_start:\n\tmoveq #-1,d0\n\trts\n");
 
 static const char lib_name[] = LIBNAME;
-static const char lib_id[] = "icon.library 47.5 (12.10.2026) OpenBench R2 (our own, for the side-by-side test)\r\n";
+static const char lib_id[] = "icon.library 47.5 (12.10.2026) OpenBench R3 (our own, for the side-by-side test)\r\n";
 static const char lib_ver[] __attribute__((used)) =
     "$VER: openicon.library 47.5 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
 
@@ -66,6 +73,8 @@ typedef char check_image[sizeof(struct Image) == 20 ? 1 : -1];
 struct ExecBase *SysBase;
 struct DosLibrary *DOSBase;
 struct Library *UtilityBase;
+struct GfxBase *GfxBase;
+struct IntuitionBase *IntuitionBase;
 
 struct OIBase {
     struct Library lib;
@@ -102,6 +111,11 @@ struct OIObject {
     struct DrawerData drawer;
     char *label;                    /* ICONGETA_Label's copy, if any */
     struct ic_palpic selected;      /* no second picture: the first, its palette darkened */
+    /* LayoutIconA: the screen's pens for each colour of each picture */
+    struct Screen *screen;
+    UWORD npens[2];
+    UBYTE pens[2][256];
+    UBYTE got[2][32];               /* which pens were obtained (and so are released) */
 };
 
 /* ---- memory for the core ---- */
@@ -161,9 +175,12 @@ static int is_ours(struct DiskObject *d)
     return found;
 }
 
+static void release_pens(struct OIObject *o);
+
 static void free_object(struct OIObject *o)
 {
     int k;
+    release_pens(o);
     for (k = 0; k < 2; k++)
         if (o->chip[k])
             FreeMem(o->chip[k], o->chipsize[k]);
@@ -1241,7 +1258,7 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
             case ICONCTRLA_HasRealImage2: *lp = ic->pal[1] != NULL; break;
             /* 3.2: TRUE for a colour icon, FALSE for a classic one (iconprobe at f0c1694) */
             case ICONCTRLA_IsNativeIcon: *lp = (ic->formats & (IC_FMT_OS35 | IC_FMT_ARGB | IC_FMT_PNG)) != 0; break;
-            case ICONCTRLA_GetScreen: *(struct Screen **)t->ti_Data = NULL; break;
+            case ICONCTRLA_GetScreen: *(struct Screen **)t->ti_Data = o->screen; break;
             default:
                 ok = FALSE;         /* step R3 */
                 break;
@@ -1261,21 +1278,243 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
     return done;
 }
 
-static BOOL L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
-                             REG(d0, LONG x), REG(d1, LONG y), REG(d2, ULONG state), REG(a3, struct TagItem *tags))
+/* ---- drawing (step R3) ----
+ * An icon is its picture, with a frame around it unless it's frameless,
+ * and its label centred under it. A colour picture is drawn with the pens
+ * LayoutIconA got from the screen; until then (or with colour icons off)
+ * the classic picture is drawn. Everything here works on a 68040 with no
+ * graphics card: graphics.library's own calls only. */
+
+#define LABEL_GAP 1                 /* rows between the picture (or its frame) and the label */
+
+static void release_pens(struct OIObject *o)
 {
-    return FALSE;                   /* step R3 */
+    int k;
+    UWORD i;
+    if (!o->screen)
+        return;
+    for (k = 0; k < 2; k++) {
+        for (i = 0; i < o->npens[k]; i++)
+            if (o->got[k][i >> 3] & (1 << (i & 7)))
+                ReleasePen(o->screen->ViewPort.ColorMap, o->pens[k][i]);
+        o->npens[k] = 0;
+        memset(o->got[k], 0, sizeof o->got[k]);
+    }
+    o->screen = NULL;
+}
+
+static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *s), REG(a2, struct TagItem *tags))
+{
+    struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
+    struct ic_icon *ic;
+    int k;
+    (void)tags;
+    if (!o)
+        return FALSE;
+    ic = o->icon;
+    release_pens(o);
+    if (!s || !ic->pal[0])
+        return TRUE;                /* nothing to lay out: drawn with the classic picture */
+    o->screen = s;
+    for (k = 0; k < 2; k++) {
+        struct ic_palpic *p = palette_for(o, ic, k);
+        UWORD i;
+        if (!p)
+            continue;
+        for (i = 0; i < p->ncolours; i++) {
+            const UBYTE *c = p->palette + i * 3;
+            LONG pen = ObtainBestPen(s->ViewPort.ColorMap, (ULONG)c[0] * 0x01010101UL, (ULONG)c[1] * 0x01010101UL,
+                                     (ULONG)c[2] * 0x01010101UL, OBP_Precision, Base->precision, TAG_DONE);
+            if (pen < 0)
+                pen = 1;            /* none to be had: drawn black, never left out */
+            else
+                o->got[k][i >> 3] |= (UBYTE)(1 << (i & 7));
+            o->pens[k][i] = (UBYTE)pen;
+        }
+        o->npens[k] = p->ncolours;
+    }
+    return TRUE;
+}
+
+/* What DrawIconStateA and GetIconRectangleA both work from. */
+struct shape {
+    LONG w, h;                      /* the picture */
+    BOOL colour;                    /* drawn from pal[], with the pens */
+    BOOL frame;                     /* a frame around it, the emboss rectangle's size */
+    BOOL border;                    /* room kept for the frame */
+    LONG lx, ly, lw, lh, llen;      /* the label, from the picture's top left */
+};
+
+static void shape_of(struct RastPort *rp, struct DiskObject *d, STRPTR label, struct TagItem *tags, struct shape *sh)
+{
+    struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
+    struct ic_icon *ic = o ? o->icon : NULL;
+    struct Image *im = (struct Image *)d->do_Gadget.GadgetRender;
+    LONG frameless;
+    sh->colour = ic && ic->pal[0] && o->screen && Base->coloricons;
+    if (sh->colour) {
+        sh->w = ic->pal[0]->width;
+        sh->h = ic->pal[0]->height;
+    } else if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE)) {
+        sh->w = im->Width;
+        sh->h = im->Height;
+    } else {
+        sh->w = d->do_Gadget.Width;
+        sh->h = d->do_Gadget.Height;
+    }
+    frameless = (LONG)GetTagData(ICONDRAWA_Frameless, ic && ic->pal[0] ? (ic->frameless || Base->frameless) : FALSE, tags);
+    sh->border = !GetTagData(ICONDRAWA_Borderless, FALSE, tags);
+    sh->frame = sh->border && !frameless;
+    sh->lx = sh->ly = sh->lw = sh->lh = sh->llen = 0;
+    if (label) {
+        sh->llen = (LONG)slen((const char *)label);
+        sh->lw = TextLength(rp, label, (UWORD)sh->llen);
+        sh->lh = rp->TxHeight;
+        sh->lx = (sh->w - sh->lw) / 2;
+        sh->ly = sh->h + (sh->border ? Base->emboss.MaxY : 0) + LABEL_GAP;
+    }
 }
 
 static BOOL L_GetIconRectangleA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
                                 REG(a3, struct Rectangle *rect), REG(a4, struct TagItem *tags))
 {
-    return FALSE;                   /* step R3 */
+    struct shape sh;
+    if (!rp || !d || !rect)
+        return FALSE;
+    shape_of(rp, d, label, tags, &sh);
+    rect->MinX = 0;
+    rect->MinY = 0;
+    rect->MaxX = (WORD)(sh.w - 1);
+    rect->MaxY = (WORD)(sh.h - 1);
+    if (sh.border) {
+        rect->MinX += Base->emboss.MinX;
+        rect->MinY += Base->emboss.MinY;
+        rect->MaxX += Base->emboss.MaxX;
+        rect->MaxY += Base->emboss.MaxY;
+    }
+    if (label) {
+        if (sh.lx < rect->MinX)
+            rect->MinX = (WORD)sh.lx;
+        if (sh.lx + sh.lw - 1 > rect->MaxX)
+            rect->MaxX = (WORD)(sh.lx + sh.lw - 1);
+        rect->MaxY = (WORD)(sh.ly + sh.lh - 1);
+    }
+    return TRUE;
 }
 
-static BOOL L_LayoutIconA(REG(a0, struct DiskObject *d), REG(a1, struct Screen *s), REG(a2, struct TagItem *tags))
+/* The colour picture, row by row, its see-through colour left out. */
+static void draw_colour(struct RastPort *rp, struct OIObject *o, int k, LONG x, LONG y)
 {
-    return FALSE;                   /* step R3 */
+    struct ic_icon *ic = o->icon;
+    struct ic_palpic *p = picture_for(ic, k);
+    const UBYTE *pens = o->pens[k];    /* the second's are the darkened palette's when it has none */
+    UBYTE *row = AllocVec(p->width, MEMF_ANY);
+    LONG r, c;
+    if (!row)
+        return;
+    for (r = 0; r < p->height; r++) {
+        const UBYTE *px = p->pixels + r * p->width;
+        for (c = 0; c < p->width;) {
+            LONG start;
+            while (c < p->width && px[c] == p->transparent)
+                c++;
+            start = c;
+            while (c < p->width && px[c] != p->transparent) {
+                row[c - start] = pens[px[c]];
+                c++;
+            }
+            if (c > start)
+                WriteChunkyPixels(rp, x + start, y + r, x + c - 1, y + r, row, p->width);
+        }
+    }
+    FreeVec(row);
+}
+
+static BOOL L_DrawIconStateA(REG(a0, struct RastPort *rp), REG(a1, struct DiskObject *d), REG(a2, STRPTR label),
+                             REG(d0, LONG x), REG(d1, LONG y), REG(d2, ULONG state), REG(a3, struct TagItem *tags))
+{
+    static const UWORD ghost[2] = { 0x8888, 0x2222 };
+    struct DrawInfo *dri = (struct DrawInfo *)GetTagData(ICONDRAWA_DrawInfo, 0, tags);
+    BOOL erase = (BOOL)GetTagData(ICONDRAWA_EraseBackground, TRUE, tags);
+    struct OIObject *o = is_ours(d) ? (struct OIObject *)d : NULL;
+    BOOL selected = state == IDS_SELECTED || state == IDS_INACTIVESELECTED;
+    UWORD pen_bg = dri ? dri->dri_Pens[BACKGROUNDPEN] : 0, pen_shine = dri ? dri->dri_Pens[SHINEPEN] : 2;
+    UWORD pen_shadow = dri ? dri->dri_Pens[SHADOWPEN] : 1, pen_text = dri ? dri->dri_Pens[TEXTPEN] : 1;
+    UWORD pen_block = dri ? dri->dri_Pens[BLOCKPEN] : 1;
+    struct shape sh;
+    ULONG apen, bpen, drmd;
+    UWORD *afpt;
+    UBYTE afsize;
+    if (!rp || !d)
+        return FALSE;
+    shape_of(rp, d, label, tags, &sh);
+    apen = GetAPen(rp);
+    bpen = GetBPen(rp);
+    drmd = GetDrMd(rp);
+    afpt = rp->AreaPtrn;
+    afsize = rp->AreaPtSz;
+    SetDrMd(rp, JAM1);
+    if (sh.border) {
+        LONG x0 = x + Base->emboss.MinX, y0 = y + Base->emboss.MinY;
+        LONG x1 = x + sh.w - 1 + Base->emboss.MaxX, y1 = y + sh.h - 1 + Base->emboss.MaxY;
+        if (erase) {
+            SetAPen(rp, pen_bg);
+            RectFill(rp, x0, y0, x1, y1);
+        }
+        if (sh.frame) {
+            /* raised, or pressed in when selected */
+            SetAPen(rp, selected ? pen_shadow : pen_shine);
+            Move(rp, x0, y1 - 1);
+            Draw(rp, x0, y0);
+            Draw(rp, x1 - 1, y0);
+            SetAPen(rp, selected ? pen_shine : pen_shadow);
+            Move(rp, x1, y0);
+            Draw(rp, x1, y1);
+            Draw(rp, x0, y1);
+        }
+    } else if (erase) {
+        SetAPen(rp, pen_bg);
+        RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+    }
+    if (sh.colour) {
+        draw_colour(rp, o, selected, x, y);
+    } else {
+        struct Image *im = (struct Image *)d->do_Gadget.GadgetRender;
+        struct Image *sel = (struct Image *)d->do_Gadget.SelectRender;
+        UWORD high = d->do_Gadget.Flags & GFLG_GADGHIGHBITS;
+        if (selected && high == GFLG_GADGHIMAGE && sel)
+            im = sel;
+        if (im && (d->do_Gadget.Flags & GFLG_GADGIMAGE))
+            DrawImage(rp, im, x, y);
+        if (selected && (high == GFLG_GADGHCOMP || (high == GFLG_GADGHIMAGE && !sel))) {
+            SetDrMd(rp, COMPLEMENT);
+            RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+            SetDrMd(rp, JAM1);
+        } else if (selected && high == GFLG_GADGHBOX) {
+            SetDrMd(rp, COMPLEMENT);
+            Move(rp, x - 4, y - 2);
+            Draw(rp, x + sh.w + 3, y - 2);
+            Draw(rp, x + sh.w + 3, y + sh.h + 1);
+            Draw(rp, x - 4, y + sh.h + 1);
+            Draw(rp, x - 4, y - 2);
+            SetDrMd(rp, JAM1);
+        }
+    }
+    if (state == IDS_DISABLED || state == IDS_SELECTEDDISABLED) {
+        SetAPen(rp, pen_block);
+        SetAfPt(rp, (UWORD *)ghost, 1);
+        RectFill(rp, x, y, x + sh.w - 1, y + sh.h - 1);
+        SetAfPt(rp, afpt, afsize);
+    }
+    if (label && sh.llen) {
+        SetAPen(rp, pen_text);
+        Move(rp, x + sh.lx, y + sh.ly + rp->TxBaseline);
+        Text(rp, label, (UWORD)sh.llen);
+    }
+    SetAPen(rp, apen);
+    SetBPen(rp, bpen);
+    SetDrMd(rp, drmd);
+    return TRUE;
 }
 
 /* OS 3.2's sum (iconprobe at 0000c5c): each gun 40 darker, down to 0. */
@@ -1430,11 +1669,17 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
     b->lib.lib_IdString = (APTR)lib_id;
     DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 39);
     UtilityBase = OpenLibrary((CONST_STRPTR)"utility.library", 39);
-    if (!DOSBase || !UtilityBase) {
+    GfxBase = (struct GfxBase *)OpenLibrary((CONST_STRPTR)"graphics.library", 40);
+    IntuitionBase = (struct IntuitionBase *)OpenLibrary((CONST_STRPTR)"intuition.library", 39);
+    if (!DOSBase || !UtilityBase || !GfxBase || !IntuitionBase) {
         if (DOSBase)
             CloseLibrary((struct Library *)DOSBase);
         if (UtilityBase)
             CloseLibrary(UtilityBase);
+        if (GfxBase)
+            CloseLibrary((struct Library *)GfxBase);
+        if (IntuitionBase)
+            CloseLibrary((struct Library *)IntuitionBase);
         FreeMem((UBYTE *)b - b->lib.lib_NegSize, b->lib.lib_NegSize + b->lib.lib_PosSize);
         return NULL;
     }
@@ -1447,6 +1692,8 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
     b->newicons = TRUE;             /* 3.2 says so but shows no NewIcon colour picture; we do (ours only) */
     b->coloricons = TRUE;
     b->maxnamelen = 25;
+    b->emboss.MinX = b->emboss.MinY = -3;   /* a guess until iconprobe 0.6 measures 3.2's */
+    b->emboss.MaxX = b->emboss.MaxY = 3;
     Base = b;
     return &b->lib;
 }
@@ -1467,6 +1714,8 @@ static BPTR lib_expunge(REG(a6, struct OIBase *b))
     }
     seg = b->seglist;
     Remove(&b->lib.lib_Node);
+    CloseLibrary((struct Library *)IntuitionBase);
+    CloseLibrary((struct Library *)GfxBase);
     CloseLibrary(UtilityBase);
     CloseLibrary((struct Library *)DOSBase);
     FreeMem((UBYTE *)b - b->lib.lib_NegSize, b->lib.lib_NegSize + b->lib.lib_PosSize);
