@@ -38,7 +38,10 @@ if command -v python3 >/dev/null; then
 fi
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
+# alohaprobe: what Intuition tells a Workbench, and when (the native screen mode's step 4; lab only)
+# shellcheck disable=SC2086
+"$CC" $COMMON -o "$OUT/alohaprobe" "$HERE/tools/alohaprobe.c"
 cp "$HERE/lab/Install-R1" "$HERE/lab/Uninstall-R1" "$OUT/"
 size() { wc -c < "$1" | tr -d ' '; }
-echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), openicon.library ($(size "$OUT/openicon.library") bytes), iconprobe ($(size "$OUT/iconprobe") bytes)"
+echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), alohaprobe ($(size "$OUT/alohaprobe") bytes), openicon.library ($(size "$OUT/openicon.library") bytes), iconprobe ($(size "$OUT/iconprobe") bytes)"
 sha256sum "$OUT/openicon.library" "$OUT/iconprobe" 2>/dev/null || true
