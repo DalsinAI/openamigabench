@@ -94,8 +94,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.15"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (11.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
+#define OPENBENCH_VERSION "0.1.16"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -967,7 +967,7 @@ static void titles_everywhere(void)
 
 /* ---- menus ---------------------------------------------------------------------------------- */
 
-enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO };
+enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT };
 
 static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"OpenBench", NULL, 0, 0, NULL },
@@ -982,6 +982,11 @@ static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
     { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
+    /* the floppy drives from the desktop (Dale, 12 Oct 2026: "attach an adf to df0 so it can be booted"):
+     * amigachrome-guest's InsertDisk window and ACDisk, through accontrol.device */
+    { NM_TITLE, (STRPTR)"Disks", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Insert Disk...", (STRPTR)"D", 0, 0, (APTR)M_DISK_INSERT },
+    { NM_ITEM, (STRPTR)"Eject DF0", NULL, 0, 0, (APTR)M_DISK_EJECT },
     { NM_END, NULL, NULL, 0, 0, NULL }
 };
 
@@ -999,6 +1004,19 @@ static void new_shell(void)
         Close(in);
         Close(out);
         DisplayBeep(look.scr);
+    }
+}
+
+/* A command started on its own, with NIL: for its input and output (an asynchronous SystemTags needs real
+ * handles); its own failure is told, not OpenBench's. */
+static void run_detached(const char *cmd, const char *missing)
+{
+    BPTR in = Open((CONST_STRPTR)"NIL:", MODE_OLDFILE), out = Open((CONST_STRPTR)"NIL:", MODE_NEWFILE);
+    if (!in || !out || SystemTags((CONST_STRPTR)cmd, SYS_Input, (ULONG)in, SYS_Output, (ULONG)out, SYS_Asynch, TRUE,
+                                  NP_StackSize, 16384, TAG_DONE) == -1) {
+        if (in) Close(in);
+        if (out) Close(out);
+        ask("OpenBench", missing, "OK");
     }
 }
 
@@ -1162,6 +1180,12 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             ULONG id = it ? (ULONG)GTMENUITEM_USERDATA(it) : 0;
             switch (id) {
             case M_SHELL: new_shell(); break;
+            case M_DISK_INSERT:
+                run_detached("C:InsertDisk", "Insert Disk couldn't start.\nIt needs C:InsertDisk from AmigaChrome.");
+                break;
+            case M_DISK_EJECT:
+                run_detached("C:ACDisk DRIVE DF0 EJECT QUIET", "DF0 couldn't be ejected.\nIt needs C:ACDisk from AmigaChrome.");
+                break;
             case M_ICON_OPEN:
             case M_ICON_INFO: {
                 int i;
