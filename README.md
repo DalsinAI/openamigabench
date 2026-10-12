@@ -18,6 +18,7 @@ Both libraries exist as **proxies**. Each one forwards every call to Hyperion's 
 | --- | --- |
 | `workbench/wblib.c` | `workbench.library`, version 47.42 like 3.2.3's. Its 19 entries are forwarded |
 | `icon/iconlib.c` | `icon.library`, version 47.5 like 3.2.3's. Its 30 entries are forwarded |
+| `icon/icon_core.c` | Step R2, not switched on yet: our own reading and writing of every icon format (classic, NewIcons, OS 3.5 GlowIcons, AROS's ARGB, and PNG icons with our own inflate), and `FindToolType`, `MatchToolValue` and `BumpRevision`. Portable C with no Amiga headers, tested on the host and under qemu-m68k against icons made with Python's own zlib (`tests/host/run.sh`, `run_m68k.sh`) |
 | `proxy/` | What both share: loading the original under a private name (`OpenUp.original.workbench.library`, for example), the forwarding stubs, and the spy |
 | `tools/wbspy` | Records every call into both libraries in a lab: the calling program, the registers, any name or tag list, and the result. It saves one line per call, both libraries merged in the order the calls were made (by the EClock). Its log is the contract for the private entries (`StartWorkbench`, `WBConfig`, `QuoteWorkbench`) |
 | `tools/alohaprobe` | For a lab only. `INFO` lists the Workbench screen (size, ModeID), its windows and free memory. `PROBE` registers as the Workbench (`AlohaWorkbench`) where none is, calls `CloseWorkBench()` and `OpenWorkBench()`, and lists every message Intuition sends and when. It is how OpenBench 0.1.22's Resize to Window was checked on OS 3.2.3 |
@@ -27,7 +28,7 @@ Nothing here has been run on an Amiga yet. It is for **lab instances only** unti
 
 ## Building
 
-`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe` and the two lab scripts to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests.
+`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe` and the two lab scripts to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68k under qemu, where an m68k cross compiler is installed.
 
 ## Trying R1 in a lab
 
