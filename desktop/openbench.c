@@ -96,7 +96,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.17"
+#define OPENBENCH_VERSION "0.1.18"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -240,8 +240,9 @@ static void thousands(char *out, int n, ULONG v)
     out[k] = 0;
 }
 
-/* The boards AmigaChrome presents through AutoConfig (Dalsin $DA15): product 9 a graphics card (ACRTG),
- * product 7 the CPU cores board (ACSV block, CLASS 2, UNITS its cores). As OpenTitle 0.6.10 counts them. */
+/* The boards AmigaChrome presents through AutoConfig (Dalsin $DA15): product 9 or 15 a graphics card (ACRTG,
+ * the 16 MiB board or the 64 MiB one; before 0.1.18 only 9 counted, so a 64 MiB machine showed GPU = 0),
+ * product 7 the CPU cores board (ACSV block, CLASS 2, UNITS its cores). As OpenTitle 0.6.15 counts them. */
 static ULONG gpus, cores, isas;           /* isas: what the cores run (ISAS, $28; bit 0 m68k always) */
 
 static void count_boards(void)
@@ -252,6 +253,8 @@ static void count_boards(void)
     if (!(ExpansionBase = (struct ExpansionBase *)OpenLibrary((STRPTR)"expansion.library", 36)))
         return;
     while ((cd = FindConfigDev(cd, 0xDA15, 9)) && gpus < 16) gpus++;
+    cd = NULL;
+    while ((cd = FindConfigDev(cd, 0xDA15, 15)) && gpus < 16) gpus++;
     if ((cd = FindConfigDev(NULL, 0xDA15, 7)) && cd->cd_BoardAddr) {
         volatile ULONG *r = (volatile ULONG *)cd->cd_BoardAddr;
         if (r[0] == 0x41435356UL && r[0x20 / 4] == 2 && r[0x24 / 4] <= 1024) { cores = r[0x24 / 4]; isas = r[0x28 / 4] | 1; }
