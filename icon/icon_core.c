@@ -77,8 +77,11 @@ void ic_free(struct ic_env *env, struct ic_icon *icon)
 /* ---- the tool type calls ---------------------------------------------- */
 
 /* FindToolType: the tool type whose name (up to '=' or its end) is name,
- * compared without regard to case. Its value after the '=', or the empty
- * string at its end when it has none. */
+ * compared without regard to case. As OS 3.2's (measured, iconprobe at
+ * 5c27ff1): spaces before a tool type's name are skipped, name is not
+ * trimmed, and name is compared whole, so "a=b" finds "a=b=c" and gives
+ * "c". The value after the '=', or the empty string at the end when there
+ * is none. */
 char *ic_find_tool_type(char **tooltypes, const char *name)
 {
     if (!tooltypes || !name)
@@ -86,7 +89,9 @@ char *ic_find_tool_type(char **tooltypes, const char *name)
     for (; *tooltypes; tooltypes++) {
         char *t = *tooltypes;
         const char *n = name;
-        while (*n && *t && *t != '=' && ic_toupper((uint8_t)*t) == ic_toupper((uint8_t)*n)) {
+        while (*t == ' ')
+            t++;
+        while (*n && *t && ic_toupper((uint8_t)*t) == ic_toupper((uint8_t)*n)) {
             t++;
             n++;
         }
@@ -127,20 +132,23 @@ static int prefix(const char *s, const char *p)
     return 1;
 }
 
-/* BumpRevision: "name" becomes "copy_of_name", "copy_of_name" becomes
- * "copy_2_of_name", and "copy_N_of_name" becomes "copy_N+1_of_name".
- * At most maxlen characters are kept. */
-void ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
+/* BumpRevision, as OS 3.2's (measured, iconprobe at 5c27ff1): "name"
+ * becomes "Copy_of_name". A name starting "copy_" (any case) is a copy:
+ * the number after it (1 when there are no digits), then "_" and "of_"
+ * when they are there, are taken off, and the rest gets "Copy_N+1_of_",
+ * or "Copy_of_" when N+1 is 1. So "copy_x_of_a" becomes "Copy_2_of_x_of_a"
+ * and "copy_0_of_a" becomes "Copy_of_a".
+ * At most maxlen characters and a NUL. When maxlen is under IC_BUMP_MIN
+ * (IC_BUMP_MIN_NUMBERED for a numbered copy) newname is left as it was
+ * and 0 is returned, as 3.2's BumpRevisionLength does. */
+int ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
 {
     char head[24];
     const char *rest = oldname;
     uint32_t n = 0, i;
-    unsigned long num = 0;
+    unsigned long num = 1;
 
-    if (prefix(oldname, "copy_of_")) {
-        num = 2;
-        rest = oldname + 8;
-    } else if (prefix(oldname, "copy_")) {
+    if (prefix(oldname, "copy_")) {
         const char *p = oldname + 5;
         unsigned long v = 0;
         int digits = 0;
@@ -148,17 +156,23 @@ void ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
             v = v * 10 + (unsigned long)(*p++ - '0');
             digits++;
         }
-        if (digits && prefix(p, "_of_")) {
-            num = v + 1;
-            rest = p + 4;
-        }
+        if (!digits)
+            v = 1;
+        else if (*p == '_')
+            p++;
+        if (prefix(p, "of_"))
+            p += 3;
+        num = v + 1;
+        rest = p;
     }
-    /* head: "copy_of_" or "copy_<num>_of_" */
+    if (maxlen < (num == 1 ? IC_BUMP_MIN : IC_BUMP_MIN_NUMBERED))
+        return 0;
+    /* head: "Copy_of_" or "Copy_<num>_of_" */
     {
-        const char *c = "copy_";
+        const char *c = "Copy_";
         while (*c)
             head[n++] = *c++;
-        if (num) {
+        if (num != 1) {
             char d[12];
             int k = 0;
             while (num) {
@@ -181,6 +195,7 @@ void ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen)
     while (*rest && i < maxlen)
         newname[i++] = *rest++;
     newname[i] = 0;
+    return 1;
 }
 
 /* ---- inflate (RFC 1951) ----------------------------------------------- */
@@ -1267,7 +1282,7 @@ static int read_classic(struct ic_env *env, struct ic_icon *icon, const uint8_t 
             }
         }
     }
-    if (!(flags & IC_READ_NOPICTURES) && !icon->pal[0])
+    if (!(flags & (IC_READ_NOPICTURES | IC_READ_NONEWICONS)) && !icon->pal[0])
         return read_newicons(env, icon);
     return IC_OK;
 }

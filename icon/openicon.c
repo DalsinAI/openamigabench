@@ -457,6 +457,8 @@ static struct DiskObject *load(const char *path, ULONG flags, LONG *err)
         *err = IoErr();
         return NULL;
     }
+    if (!Base->newicons)
+        flags |= IC_READ_NONEWICONS;
     r = ic_read(&env, buf, len, flags, &icon);
     FreeVec(buf);
     if (r != IC_OK) {
@@ -483,6 +485,17 @@ static BOOL save(const char *path, struct DiskObject *d, ULONG drop, LONG *err)
         *err = ERROR_NO_FREE_STORE;
         return FALSE;
     }
+    /* What OS 3.2's PutDiskObject writes in place of what it was given
+     * (iconprobe at 5c27ff1): the gadget as RELVERIFY only, a stack of 0 as
+     * 4096, an empty tool type array as none, and an OS 1.3 icon raised to
+     * the disk revision, its new drawer fields zero. */
+    icon->gactivation = GACT_RELVERIFY;
+    if (!icon->stacksize)
+        icon->stacksize = 4096;
+    if (icon->tooltypes && !icon->tooltypes[0])
+        icon->tooltypes = NULL;
+    if (!(icon->guserdata & 0xFF))
+        icon->guserdata = WB_DISKREVISION;
     size = ic_write(&env, icon, NULL, 0);
     buf = AllocVec(size ? size : 1, MEMF_ANY);
     if (!buf) {
@@ -580,7 +593,7 @@ static struct DiskObject *builtin(LONG type)
     icon->gflags = GFLG_GADGIMAGE | GFLG_GADGHIMAGE;
     icon->gactivation = GACT_RELVERIFY | GACT_IMMEDIATE;
     icon->gtype = GTYP_BOOLGADGET;
-    if (type == WBDISK || type == WBDRAWER || type == WBGARBAGE || type == WBKICK || type == WBDEVICE) {
+    if (type == WBDISK || type == WBDRAWER || type == WBGARBAGE) {
         struct ic_drawer *d = ic_own(&env, icon, sizeof *d);
         if (!d) {
             ic_free(&env, icon);
@@ -612,6 +625,10 @@ static struct DiskObject *default_icon(LONG type, CONST_STRPTR name, LONG *err)
             *err = ERROR_REQUIRED_ARG_MISSING;
             return NULL;
         }
+        if (type == WBAPPICON) {        /* 3.2 has no default AppIcon */
+            *err = ERROR_OBJECT_NOT_FOUND;
+            return NULL;
+        }
         n = def_names[type];
     }
     for (k = 0; "ENV:Sys/"[k]; k++)
@@ -620,8 +637,10 @@ static struct DiskObject *default_icon(LONG type, CONST_STRPTR name, LONG *err)
         path[i++] = n[k];
     CopyMem(".info", path + i, 6);
     d = load(path, 0, err);
-    if (d)
+    if (d) {
+        d->do_CurrentX = d->do_CurrentY = (LONG)NO_ICON_POSITION;   /* as 3.2's */
         return d;
+    }
     if (!name) {
         d = builtin(type);
         if (!d)
@@ -864,30 +883,54 @@ static BOOL L_PutDefDiskObject(REG(a0, struct DiskObject *d))
     return put_icon(NULL, d, t);
 }
 
+/* NewDiskObject, as OS 3.2's (iconprobe at 5c27ff1): a BOOLGADGET with
+ * RELVERIFY, a picture, the highlight below, a selected picture for a
+ * drawer and the trashcan, a drawer window at 50,50 400x100 for a disk, a
+ * drawer and the trashcan; no AppIcon. */
+static const UBYTE new_highlight[] = {
+    0, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHCOMP, GFLG_GADGHBOX, GFLG_GADGHIMAGE, GFLG_GADGHBOX, GFLG_GADGHBOX
+};
+
 static struct DiskObject *L_NewDiskObject(REG(d0, LONG type))
 {
-    struct ic_icon *icon = AllocVec(sizeof *icon, MEMF_ANY | MEMF_CLEAR);
+    struct ic_icon *icon;
     struct OIObject *o;
+    if (type < WBDISK || type > WBKICK)
+        return NULL;
+    icon = AllocVec(sizeof *icon, MEMF_ANY | MEMF_CLEAR);
     if (!icon)
         return NULL;
     icon->formats = IC_FMT_CLASSIC;
     icon->type = (uint8_t)type;
     icon->currentx = icon->currenty = (int32_t)NO_ICON_POSITION;
     icon->guserdata = WB_DISKREVISION;
+    icon->gflags = GFLG_GADGIMAGE | new_highlight[type];
+    icon->gactivation = GACT_RELVERIFY;
+    icon->gtype = GTYP_BOOLGADGET;
+    icon->planar[0] = builtin_picture(icon, type, 0);
+    if (!icon->planar[0])
+        goto fail;
+    if (new_highlight[type] == GFLG_GADGHIMAGE) {
+        icon->planar[1] = builtin_picture(icon, type, 1);
+        if (!icon->planar[1])
+            goto fail;
+    }
     if (type == WBDISK || type == WBDRAWER || type == WBGARBAGE) {
         struct ic_drawer *d = ic_own(&env, icon, sizeof *d);
-        if (!d) {
-            ic_free(&env, icon);
-            return NULL;
-        }
+        if (!d)
+            goto fail;
+        d->left = 50;
+        d->top = 50;
+        d->width = 400;
+        d->height = 100;
         icon->drawer = d;
     }
     o = make_object(icon);
-    if (!o) {
-        ic_free(&env, icon);
-        return NULL;
-    }
-    return &o->dobj;
+    if (o)
+        return &o->dobj;
+fail:
+    ic_free(&env, icon);
+    return NULL;
 }
 
 static struct DiskObject *L_GetIconTagList(REG(a0, CONST_STRPTR name), REG(a1, struct TagItem *tags))
@@ -955,6 +998,20 @@ static struct DiskObject *L_DupDiskObjectA(REG(a0, struct DiskObject *d), REG(a1
 
 /* IconControlA: the global settings, and the questions about an icon's
  * pictures. The setters for an icon's pictures are step R3. */
+/* The picture IconControlA answers about for image k, and its palette. */
+static struct ic_palpic *picture_for(struct ic_icon *ic, int k)
+{
+    return ic->pal[k] ? ic->pal[k] : ic->pal[0];
+}
+
+static struct ic_palpic *palette_for(struct ic_icon *ic, int k)
+{
+    struct ic_palpic *p = picture_for(ic, k);
+    if (p && !p->ncolours)
+        p = ic->pal[0];
+    return p && p->ncolours ? p : NULL;
+}
+
 static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagItem *tags))
 {
     struct TagItem *state = tags, *t;
@@ -999,29 +1056,33 @@ static ULONG L_IconControlA(REG(a0, struct DiskObject *d), REG(a1, struct TagIte
                 ok = FALSE;
                 break;
             }
+            /* As OS 3.2 answers (iconprobe at 5c27ff1): with no second
+             * picture the first stands in for it, a second picture with no
+             * palette of its own uses the first's, and an icon with no
+             * colour picture says colour 0 is transparent. */
             switch (t->ti_Tag) {
             case ICONCTRLA_GetImageData1:
             case ICONCTRLA_GetImageData2: {
-                struct ic_palpic *p = ic->pal[t->ti_Tag == ICONCTRLA_GetImageData2];
+                struct ic_palpic *p = picture_for(ic, t->ti_Tag == ICONCTRLA_GetImageData2);
                 *(UBYTE **)t->ti_Data = p ? p->pixels : NULL;
                 break;
             }
             case ICONCTRLA_GetPalette1:
             case ICONCTRLA_GetPalette2: {
-                struct ic_palpic *p = ic->pal[t->ti_Tag == ICONCTRLA_GetPalette2];
-                *(struct ColorRegister **)t->ti_Data = (p && p->ncolours) ? (struct ColorRegister *)p->palette : NULL;
+                struct ic_palpic *p = palette_for(ic, t->ti_Tag == ICONCTRLA_GetPalette2);
+                *(struct ColorRegister **)t->ti_Data = p ? (struct ColorRegister *)p->palette : NULL;
                 break;
             }
             case ICONCTRLA_GetPaletteSize1:
             case ICONCTRLA_GetPaletteSize2: {
-                struct ic_palpic *p = ic->pal[t->ti_Tag == ICONCTRLA_GetPaletteSize2];
+                struct ic_palpic *p = palette_for(ic, t->ti_Tag == ICONCTRLA_GetPaletteSize2);
                 *lp = p ? p->ncolours : 0;
                 break;
             }
             case ICONCTRLA_GetTransparentColor1:
             case ICONCTRLA_GetTransparentColor2: {
-                struct ic_palpic *p = ic->pal[t->ti_Tag == ICONCTRLA_GetTransparentColor2];
-                *lp = p ? p->transparent : -1;
+                struct ic_palpic *p = picture_for(ic, t->ti_Tag == ICONCTRLA_GetTransparentColor2);
+                *lp = p ? p->transparent : 0;
                 break;
             }
             case ICONCTRLA_GetWidth: *lp = ic->pal[0] ? ic->pal[0]->width : 0; break;
@@ -1094,7 +1155,7 @@ static UBYTE *L_BumpRevision(REG(a0, UBYTE *newname), REG(a1, UBYTE *oldname))
 
 static UBYTE *L_BumpRevisionLength(REG(a0, UBYTE *newname), REG(a1, UBYTE *oldname), REG(d0, ULONG maxlen))
 {
-    ic_bump_revision((char *)newname, (const char *)oldname, maxlen);
+    ic_bump_revision((char *)newname, (const char *)oldname, maxlen);  /* may leave it, as 3.2 does */
     return newname;
 }
 
@@ -1219,7 +1280,7 @@ static struct Library *lib_init(REG(d0, struct OIBase *b), REG(a0, BPTR seg), RE
     b->objects.mlh_TailPred = (struct MinNode *)&b->objects.mlh_Head;
     b->precision = PRECISION_ICON;
     b->frameless = FALSE;
-    b->newicons = TRUE;
+    b->newicons = FALSE;            /* OS 3.2 reads no NewIcons out of the box (iconprobe at 5c27ff1) */
     b->coloricons = TRUE;
     b->maxnamelen = 25;
     Base = b;

@@ -274,20 +274,44 @@ static void test_tooltypes(void)
     CHECK(!ic_match_tool_value("", "a"), "empty string");
     CHECK(ic_match_tool_value("one", "one"), "single");
 
-    ic_bump_revision(newname, "Disk", 30);
-    CHECK(strcmp(newname, "copy_of_Disk") == 0, "%s", newname);
-    ic_bump_revision(newname, "copy_of_Disk", 30);
-    CHECK(strcmp(newname, "copy_2_of_Disk") == 0, "%s", newname);
-    ic_bump_revision(newname, "copy_2_of_Disk", 30);
-    CHECK(strcmp(newname, "copy_3_of_Disk") == 0, "%s", newname);
-    ic_bump_revision(newname, "copy_99_of_Disk", 30);
-    CHECK(strcmp(newname, "copy_100_of_Disk") == 0, "%s", newname);
-    ic_bump_revision(newname, "copy_x_of_Disk", 30);
-    CHECK(strcmp(newname, "copy_of_copy_x_of_Disk") == 0, "%s", newname);
-    ic_bump_revision(newname, "A very long name of thirty characters", 30);
-    CHECK(strlen(newname) == 30 && strncmp(newname, "copy_of_A very long", 19) == 0, "%s", newname);
-    ic_bump_revision(newname, "Disk", 6);
-    CHECK(strcmp(newname, "copy_o") == 0, "%s", newname);
+    /* OS 3.2's answers, from iconprobe at 5c27ff1 */
+    {
+        static const char *const cases[][2] = {
+            { "Disk", "Copy_of_Disk" },
+            { "copy_of_Disk", "Copy_2_of_Disk" },
+            { "copy_2_of_Disk", "Copy_3_of_Disk" },
+            { "copy_99_of_Disk", "Copy_100_of_Disk" },
+            { "copy_x_of_Disk", "Copy_2_of_x_of_Disk" },
+            { "Copy_Of_Disk", "Copy_2_of_Disk" },
+            { "copy_of_", "Copy_2_of_" },
+            { "copy_0_of_Disk", "Copy_of_Disk" },
+            { "copy_2_of_", "Copy_3_of_" },
+            { "A very long name of thirty characters", "Copy_of_A very long name of th" },
+            { "123456789012345678901234567890", "Copy_of_1234567890123456789012" },
+            { "copy_123456789_of_x", "Copy_123456790_of_x" },
+            { "", "Copy_of_" },
+        };
+        unsigned k;
+        for (k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+            CHECK(ic_bump_revision(newname, cases[k][0], 30) == 1, "%s", cases[k][0]);
+            CHECK(strcmp(newname, cases[k][1]) == 0, "%s: %s", cases[k][0], newname);
+        }
+    }
+    memset(newname, 'U', sizeof newname);
+    CHECK(ic_bump_revision(newname, "Disk", 4) == 0 && newname[0] == 'U' && newname[4] == 'U', "untouched at 4");
+    CHECK(ic_bump_revision(newname, "copy_of_Disk", 13) == 0 && newname[0] == 'U', "numbered, untouched at 13");
+    CHECK(ic_bump_revision(newname, "copy_0_of_Disk", 13) == 1 && strcmp(newname, "Copy_of_Disk") == 0, "%s", newname);
+    CHECK(ic_bump_revision(newname, "A very long name of thirty characters", 13) == 1
+          && strcmp(newname, "Copy_of_A ver") == 0, "%s", newname);
+    CHECK(ic_bump_revision(newname, "copy_99_of_Disk", 22) == 1 && strcmp(newname, "Copy_100_of_Disk") == 0, "%s", newname);
+
+    {
+        char *tt2[] = { "  SPACE=1", "a=b=c", "\tTAB=2", NULL };
+        CHECK(ic_find_tool_type(tt2, "SPACE") && strcmp(ic_find_tool_type(tt2, "SPACE"), "1") == 0, "leading spaces skipped");
+        CHECK(ic_find_tool_type(tt2, "  SPACE") == NULL, "the name is not trimmed");
+        CHECK(ic_find_tool_type(tt2, "a=b") && strcmp(ic_find_tool_type(tt2, "a=b"), "c") == 0, "'=' in the name");
+        CHECK(ic_find_tool_type(tt2, "a") && strcmp(ic_find_tool_type(tt2, "a"), "b=c") == 0, "a");
+    }
 }
 
 static void test_rle(void)

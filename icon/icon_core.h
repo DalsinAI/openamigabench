@@ -78,6 +78,7 @@ struct ic_env {
 /* ic_read's flags */
 #define IC_READ_NOPICTURES 0x01     /* fields only: no picture decoded (Workbench's
                                      * Information window, ICONGETA_GetPaletteMappedIcon FALSE...) */
+#define IC_READ_NONEWICONS 0x02     /* IM1=/IM2= tool types left as tool types */
 
 /* A classic picture: struct Image and its planes, as stored. */
 struct ic_planar {
@@ -160,8 +161,12 @@ char *ic_own_string(struct ic_env *env, struct ic_icon *icon, const char *s);
 /* The tool type calls (FindToolType, MatchToolValue, BumpRevision) */
 char *ic_find_tool_type(char **tooltypes, const char *name);
 int ic_match_tool_value(const char *typestring, const char *value);
-/* newname gets at most maxlen characters and a NUL (BumpRevision: 30). */
-void ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen);
+/* newname gets at most maxlen characters and a NUL (BumpRevision: 30).
+ * Below these maxlens 3.2 leaves newname untouched (measured between 4
+ * and 13, and 13 and 22; the next probe gives the exact ones): 0. */
+#define IC_BUMP_MIN          9
+#define IC_BUMP_MIN_NUMBERED 20
+int ic_bump_revision(char *newname, const char *oldname, uint32_t maxlen);
 
 /* The pieces, for the library and the tests */
 int ic_inflate(const uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t dstlen, uint32_t *outlen);

@@ -30,12 +30,12 @@
 #include <proto/icon.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.1 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.2 (12.10.2026) OpenBench R2, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 static struct Library *os_base, *our_base;
 static int show_all;
-static ULONG cases, diffs;
+static ULONG cases, diffs, extras;
 
 #define TEMPLATE "DIRS/M,TEMP/K,ALL/S"
 enum { A_DIRS, A_TEMP, A_ALL, A_COUNT };
@@ -188,12 +188,14 @@ static void ask(struct Library *lib, struct DiskObject *d, struct pictures *p)
         TAG_DONE);
 }
 
-static void colour_pictures(const char *name, struct DiskObject *a, struct DiskObject *b)
+/* la and lb: the libraries that made a and b, which are asked. */
+static void colour_pictures(const char *name, struct Library *la, struct DiskObject *a,
+                            struct Library *lb, struct DiskObject *b)
 {
     struct pictures x, y;
     int k;
-    ask(os_base, a, &x);
-    ask(our_base, b, &y);
+    ask(la, a, &x);
+    ask(lb, b, &y);
     num("colour: mapped", name, x.mapped, y.mapped);
     num("colour: NewIcon", name, x.newicon, y.newicon);
     num("colour: second real", name, x.real2, y.real2);
@@ -257,7 +259,7 @@ static void put_back(const char *name, struct DiskObject *a, struct DiskObject *
         char w[160];
         snprintf(w, sizeof w, "%s (written)", name);
         fields(w, ra, rb);
-        colour_pictures(w, ra, rb);
+        colour_pictures(w, os_base, ra, os_base, rb);   /* both read by Hyperion's */
     }
     IconBase = os_base;
     if (ra)
@@ -272,12 +274,18 @@ static void one_icon(const char *name, const char *temp)
 {
     LONG ea, eb;
     struct DiskObject *a = get(os_base, name, &ea), *b = get(our_base, name, &eb);
-    num("read", name, a != NULL, b != NULL);
-    if (!a || !b)
-        num("read error", name, ea, eb);
+    if (!a && b) {
+        /* one Hyperion's can't read (PNG icons): ours only, not a difference */
+        extras++;
+        printf("EXTRA %s: Hyperion can't read it (error %ld), ours can\n", name, (long)ea);
+    } else {
+        num("read", name, a != NULL, b != NULL);
+        if (!a || !b)
+            num("read error", name, ea, eb);
+    }
     if (a && b) {
         fields(name, a, b);
-        colour_pictures(name, a, b);   /* each library asked about its own object */
+        colour_pictures(name, os_base, a, our_base, b);   /* each library asked about its own object */
         put_back(name, a, b, temp);
     }
     IconBase = os_base;
@@ -317,15 +325,36 @@ static void one_dir(const char *dir, const char *temp)
 
 /* ---- the calls that keep no state ---- */
 
+/* A BumpRevision buffer as text: "(untouched)" when nothing was written,
+ * "(no NUL)" when something was but not its end. One at a time. */
+static const char *shown(char *buf, ULONG size)
+{
+    static char out[2][80];
+    static int which;
+    char *o = out[which ^= 1];
+    ULONG k;
+    for (k = 0; k < size && (UBYTE)buf[k] == 0x55; k++)
+        ;
+    if (k == size)
+        return "(untouched)";
+    if (!memchr(buf, 0, size)) {
+        snprintf(o, sizeof out[0], "(no NUL) %.*s", (int)(size < 40 ? size : 40), buf);
+        return o;
+    }
+    return buf;
+}
+
 static void tool_types(void)
 {
     static const char *const tt_src[] = {
         "DONOTWAIT", "FILE=S:Startup-Sequence", "Tool=OpenEdit", "(OFF)", "OFFX=1", "EMPTY=", "  SPACE=1",
-        "a=b=c", "=novalue", "LONG=" "0123456789012345678901234567890123456789", NULL
+        "a=b=c", "=novalue", "LONG=" "0123456789012345678901234567890123456789", "\tTAB=1", " SP AFTER =2",
+        "TRAIL =3", NULL
     };
     static const char *const queries[] = {
         "DONOTWAIT", "donotwait", "FILE", "TOOL", "OFF", "(OFF)", "FIL", "OFFX", "EMPTY", "SPACE", "  SPACE",
-        "A", "a=b", "", "LONG", "MISSING", NULL
+        "A", "a=b", "", "LONG", "MISSING", "TAB", "\tTAB", "SP AFTER", "SP AFTER ", "TRAIL", "TRAIL ", "=NOVALUE",
+        NULL
     };
     static const char *const values[][2] = {
         { "text|ascii", "text" }, { "text|ascii", "ASCII" }, { "text|ascii", "asc" }, { "text|ascii", "ascii2" },
@@ -335,7 +364,8 @@ static void tool_types(void)
     static const char *const names[] = {
         "Disk", "copy_of_Disk", "copy_2_of_Disk", "copy_99_of_Disk", "copy_x_of_Disk", "Copy_Of_Disk", "copy_of_",
         "copy_0_of_Disk", "copy_2_of_", "A very long name of thirty characters", "123456789012345678901234567890",
-        "copy_123456789_of_x", "", NULL
+        "copy_123456789_of_x", "", "copy_2Disk", "copy_2_Disk", "copy_", "COPY_OF_x", "copy_of_copy_of_x",
+        "copy_-1_of_x", "copyof_x", "copy_ 2_of_x", "copy_1234567890_of_x", "copy_4294967295_of_x", NULL
     };
     STRPTR tt[16];
     int i;
@@ -373,16 +403,19 @@ static void tool_types(void)
         IconBase = our_base;
         BumpRevision((STRPTR)b, (CONST_STRPTR)names[i]);
         snprintf(w, sizeof w, "BumpRevision \"%s\"", names[i]);
-        str(w, "tool types", a, b);
-        for (len = 4; len <= 40; len += 9) {
+        str(w, "tool types", shown(a, sizeof a), shown(b, sizeof b));
+        for (len = 0; len <= 40; len++) {
+            UBYTE *ra, *rb;
             memset(a, 0x55, sizeof a);
             memset(b, 0x55, sizeof b);
             IconBase = os_base;
-            BumpRevisionLength((STRPTR)a, (CONST_STRPTR)names[i], len);
+            ra = BumpRevisionLength((STRPTR)a, (CONST_STRPTR)names[i], len);
             IconBase = our_base;
-            BumpRevisionLength((STRPTR)b, (CONST_STRPTR)names[i], len);
+            rb = BumpRevisionLength((STRPTR)b, (CONST_STRPTR)names[i], len);
             snprintf(w, sizeof w, "BumpRevisionLength %lu \"%s\"", (unsigned long)len, names[i]);
-            str(w, "tool types", a, b);
+            str(w, "tool types", shown(a, sizeof a), shown(b, sizeof b));
+            num(w, "tool types (result)", ra == NULL ? 0 : ra == (UBYTE *)a ? 1 : 2,
+                rb == NULL ? 0 : rb == (UBYTE *)b ? 1 : 2);
         }
     }
 }
@@ -446,6 +479,9 @@ static void defaults(void)
             num("drawer data there", w, a->do_DrawerData != NULL, b->do_DrawerData != NULL);
             num("stack", w, a->do_StackSize, b->do_StackSize);
             num("place", w, a->do_CurrentX, b->do_CurrentX);
+            num("place y", w, a->do_CurrentY, b->do_CurrentY);
+            num("gadget flags", w, a->do_Gadget.Flags, b->do_Gadget.Flags);
+            image("picture", w, (struct Image *)a->do_Gadget.GadgetRender, (struct Image *)b->do_Gadget.GadgetRender);
         }
         IconBase = os_base;
         if (a) FreeDiskObject(a);
@@ -487,6 +523,102 @@ static void defaults(void)
     }
 }
 
+/* The global settings, and NewIcons with both switched on. */
+static void globals(const char *temp)
+{
+    static const ULONG gets[][2] = {
+        { ICONCTRLA_GetGlobalNewIconsSupport, 0 }, { ICONCTRLA_GetGlobalColorIconSupport, 0 },
+        { ICONCTRLA_GetGlobalMaxNameLength, 0 }, { ICONCTRLA_GetGlobalPrecision, 0 },
+        { ICONCTRLA_GetGlobalFrameless, 0 }
+    };
+    LONG was[2] = { 0, 0 };
+    ULONG k;
+    (void)temp;
+    for (k = 0; k < sizeof gets / sizeof gets[0]; k++) {
+        LONG a = -12345, b = -12345;
+        ULONG ra, rb;
+        char w[24];
+        IconBase = os_base;
+        ra = IconControl(NULL, gets[k][0], &a, TAG_DONE);
+        IconBase = our_base;
+        rb = IconControl(NULL, gets[k][0], &b, TAG_DONE);
+        sprintf(w, "global %lx", (unsigned long)(gets[k][0] & 0xFFFF));
+        num(w, "IconControl", a, b);
+        num(w, "IconControl (answered)", ra, rb);
+    }
+    IconBase = os_base;
+    IconControl(NULL, ICONCTRLA_GetGlobalNewIconsSupport, &was[0], TAG_DONE);
+    IconControl(NULL, ICONCTRLA_SetGlobalNewIconsSupport, TRUE, TAG_DONE);
+    IconBase = our_base;
+    IconControl(NULL, ICONCTRLA_GetGlobalNewIconsSupport, &was[1], TAG_DONE);
+    IconControl(NULL, ICONCTRLA_SetGlobalNewIconsSupport, TRUE, TAG_DONE);
+    {
+        const char *n = "SYS:Storage/OpenBench-Icons/newicons";
+        LONG ea, eb;
+        struct DiskObject *a = get(os_base, n, &ea), *b = get(our_base, n, &eb);
+        num("read", "NewIcons on", a != NULL, b != NULL);
+        if (a && b)
+            colour_pictures("NewIcons on", os_base, a, our_base, b);
+        IconBase = os_base;
+        if (a) FreeDiskObject(a);
+        IconBase = our_base;
+        if (b) FreeDiskObject(b);
+    }
+    IconBase = os_base;
+    IconControl(NULL, ICONCTRLA_SetGlobalNewIconsSupport, was[0], TAG_DONE);
+    IconBase = our_base;
+    IconControl(NULL, ICONCTRLA_SetGlobalNewIconsSupport, was[1], TAG_DONE);
+}
+
+/* What PutDiskObject writes for gadget and stack values it is given: one
+ * of Hyperion's own objects, changed, written by each library and read
+ * back by Hyperion's. */
+static void writing(const char *temp)
+{
+    static const UWORD acts[] = { 0, GACT_RELVERIFY, GACT_IMMEDIATE, 7, GACT_TOGGLESELECT | GACT_RELVERIFY };
+    static const ULONG stacks[] = { 0, 1000, 4095, 4096, 100000 };
+    static const UWORD gflags[] = { 0, 4, 5, 6, 7 };
+    static const UWORD gtypes[] = { 0, 1, 3, 4 };
+    static const ULONG revs[] = { 0, 1, 2, 0x101 };
+    char pa[256], pb[256];
+    ULONG k;
+    snprintf(pa, sizeof pa, "%s/iconprobe-os", temp);
+    snprintf(pb, sizeof pb, "%s/iconprobe-ours", temp);
+    for (k = 0; k < 5; k++) {
+        struct DiskObject *d, *ra = NULL, *rb = NULL;
+        LONG ea = 0, eb = 0;
+        BOOL oka, okb;
+        char w[40];
+        IconBase = os_base;
+        d = NewDiskObject(k == 1 ? WBDRAWER : WBTOOL);
+        if (!d)
+            break;
+        d->do_Gadget.Activation = acts[k];
+        d->do_StackSize = stacks[k];
+        d->do_Gadget.Flags = gflags[k];
+        d->do_Gadget.GadgetType = gtypes[k & 3];
+        d->do_Gadget.UserData = (APTR)revs[k & 3];
+        oka = PutDiskObject((CONST_STRPTR)pa, d);
+        IconBase = our_base;
+        okb = PutDiskObject((CONST_STRPTR)pb, d);
+        sprintf(w, "written case %lu", (unsigned long)k);
+        num("written", w, oka, okb);
+        if (oka && okb) {
+            ra = get(os_base, pa, &ea);
+            rb = get(os_base, pb, &eb);
+            num("read back", w, ra != NULL, rb != NULL);
+            if (ra && rb)
+                fields(w, ra, rb);
+        }
+        IconBase = os_base;
+        if (ra) FreeDiskObject(ra);
+        if (rb) FreeDiskObject(rb);
+        FreeDiskObject(d);
+        DeleteDiskObject((CONST_STRPTR)pa);
+        DeleteDiskObject((CONST_STRPTR)pb);
+    }
+}
+
 int main(void)
 {
     struct RDArgs *rd;
@@ -517,6 +649,8 @@ int main(void)
     tool_types();
     free_lists();
     defaults();
+    globals(temp);
+    writing(temp);
     if (args[A_DIRS]) {
         char **d;
         for (d = (char **)args[A_DIRS]; *d; d++)
@@ -525,7 +659,8 @@ int main(void)
         for (i = 0; default_dirs[i]; i++)
             one_dir(default_dirs[i], temp);
     }
-    printf("%s %lu/%lu\n", diffs ? "DIFFER" : "ALL SAME", (unsigned long)(cases - diffs), (unsigned long)cases);
+    printf("%s %lu/%lu, %lu ours only\n", diffs ? "DIFFER" : "ALL SAME", (unsigned long)(cases - diffs),
+           (unsigned long)cases, (unsigned long)extras);
     CloseLibrary(our_base);
     CloseLibrary(os_base);
     FreeArgs(rd);
