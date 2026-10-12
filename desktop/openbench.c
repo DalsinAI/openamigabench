@@ -34,7 +34,7 @@
  *   - quitting (0.1.19): programs started from OpenBench (OpenMeters from SYS:WBStartup, say) are asked to quit
  *     with Ctrl-C, which they answer, as their code is OpenBench's to unload; before, quitting waited for them
  *     for ever;
- *   - picture thumbnails and icon sizes in the drawers (0.1.20; Dale, 12 October 2026: "using datatypes to
+ *   - picture thumbnails and icon sizes in the drawers (0.1.20, 0.1.21; Dale, 12 October 2026: "using datatypes to
  *     display picture thumbnails and variable size icons", the mockup approved the same evening): OpenDrawer's
  *     (opengadtools workbench/wb_thumb.c), its process started here and stopped before OpenBench ends;
  * Window frames are OpenFrames' (OpenLook), as on every window.
@@ -109,11 +109,12 @@
 #include "wb_drawer.h"
 #include "wb_dir.h"
 #include "wb_thumb.h"
+#include "wb_pic.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.20"
+#define OPENBENCH_VERSION "0.1.21"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
@@ -1609,6 +1610,9 @@ static int run(void)
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 44);
     WorkbenchBase = OpenLibrary((CONST_STRPTR)"workbench.library", 44);
     CyberGfxBase = OpenLibrary((CONST_STRPTR)"cybergraphics.library", 40);
+    /* OpenDrawer's pictures (the list's small icons, sizes, thumbnails) are written with cybergraphics,
+     * which wb_pic opens for itself: 0.1.20, which never opened it, drew them all as icons (Instance-32) */
+    wb_pic_open();
     if (!IconBase) goto out;
     if (!(launch_port = CreateMsgPort())) goto out;
     if ((picture_sig = AllocSignal(-1)) < 0) goto out;
@@ -1765,6 +1769,7 @@ out:
     desktop_down();                             /* the Information windows, the drawers, the root, the screen */
     wbc_stop();
     wb_thumb_stop();                            /* its process runs our code, and uses datatypes.library */
+    wb_pic_close();
     if (DataTypesBase) { CloseLibrary(DataTypesBase); DataTypesBase = NULL; }
     if (launch_port) {
         /* tools still running keep their code until they end: they are asked to quit, then waited for */
