@@ -17,8 +17,8 @@ Both libraries exist as **proxies**. Each one forwards every call to Hyperion's 
 | Part | What it does now |
 | --- | --- |
 | `workbench/wblib.c` | `workbench.library`, version 47.42 like 3.2.3's. Its 19 entries are forwarded |
-| `workbench/wb_core.c`, `workbench/openwb.c` | Step L1, not switched on: the Team's own `workbench.library` lists (AppWindows, drop zones, AppIcons, AppMenuItems) and `WorkbenchControlA`'s settings, in portable C, built as `openwb.library` under its own name. It hooks nothing. The design is `docs/design/Design-Open-Workbench-Library.md`, which waits for the user's approval before anything hooks |
-| `tests/amiga/WorkbenchABITest` | For a lab only: calls the system's `workbench.library` and `openwb.library` side by side and lists each difference |
+| `workbench/wb_core.c`, `workbench/openbench.c` | Step L1, not switched on: the lists of the Team's own `workbench.library` (AppWindows, drop zones, AppIcons, AppMenuItems) and `WorkbenchControlA`'s settings, in portable C, built as `openbench.library` under its own name. It hooks nothing. The design is `docs/design/Design-Open-Workbench-Library.md`: `workbench.library` becomes OpenBench itself, version 48 (the user's decisions of 13 October 2026) |
+| `tests/amiga/WorkbenchABITest` | For a lab only: calls the system's `workbench.library` and `openbench.library` side by side and lists each difference |
 | `icon/iconlib.c` | `icon.library`, version 47.5 like 3.2.3's. Its 30 entries are forwarded |
 | `icon/icon_core.c` | Step R2, not switched on yet: our own reading and writing of every icon format (classic, NewIcons, OS 3.5 GlowIcons, AROS's ARGB, and PNG icons with our own inflate), and `FindToolType`, `MatchToolValue` and `BumpRevision`. Portable C with no Amiga headers, tested on the host and under qemu-m68k against icons made with Python's own zlib (`tests/host/run.sh`, `run_m68k.sh`) |
 | `proxy/` | What both share: loading the original under a private name (`OpenUp.original.workbench.library`, for example), the forwarding stubs, and the spy |
@@ -30,7 +30,7 @@ Nothing here has been run on an Amiga yet. It is for **lab instances only** unti
 
 ## Building
 
-`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openwb.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68k under qemu, where an m68k cross compiler is installed.
+`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openbench.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68k under qemu, where an m68k cross compiler is installed.
 
 ## Trying R1 in a lab
 

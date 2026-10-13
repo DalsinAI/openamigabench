@@ -52,8 +52,9 @@ static void appwindows(void)
     struct wbc_tag none[] = { { 0, 0 } };
     wbc_init(&s, &env);
 
-    /* OS 3.2's rule: nothing is added while no Workbench runs */
-    CHECK(wbc_add_appwindow(&s, 1, 2, &win1, &port1, none, &a) == WBC_ERR_NODESK && !a, "no desktop: refused");
+    /* the user's decision 3: kept before the desktop is up */
+    CHECK(wbc_add_appwindow(&s, 1, 2, &win1, &port1, none, &a) == WBC_OK && a, "no desktop: kept");
+    CHECK(wbc_remove_appwindow(&s, a) == WBC_OK, "removed");
     s.desktop = 1;
     /* OS 3.2 takes a NULL window and a NULL port (WorkbenchABITest) */
     CHECK(wbc_add_appwindow(&s, 1, 2, NULL, &port1, none, &a) == WBC_OK && a, "no window");
@@ -172,7 +173,9 @@ static void appmenus(void)
     struct wbc_tag cmd2[] = { { TAG(15), (uintptr_t)"Q" }, { 0, 0 } };
     struct wbc_tag cmd0[] = { { TAG(15), (uintptr_t)"" }, { 0, 0 } };
     wbc_init(&s, &env);
-    CHECK(wbc_add_appmenu(&s, 1, 2, "Item", &port1, NULL, &m, &key, &given) == WBC_ERR_NODESK, "no desktop");
+    s.refuse_without_desktop = 1;   /* OS 3.2's rule, kept as an option */
+    CHECK(wbc_add_appmenu(&s, 1, 2, "Item", &port1, NULL, &m, &key, &given) == WBC_ERR_NODESK && !m, "OS 3.2's rule: refused");
+    s.refuse_without_desktop = 0;
     s.desktop = 1;
     CHECK(wbc_add_appmenu(&s, 1, 2, NULL, &port1, NULL, &m, &key, &given) == WBC_OK && m && m->u.mi.text && !m->u.mi.text[0],
           "no text, as 3.2: an empty label");
@@ -352,8 +355,9 @@ static void refuse_rule(void)
     struct wbc_state s;
     struct wbc_obj *o;
     wbc_init(&s, &env);
-    s.refuse_without_desktop = 0;   /* the other answer to the design's question 3 */
-    CHECK(wbc_add_appwindow(&s, 0, 0, &win1, &port1, NULL, &o) == WBC_OK, "kept for the desktop to come");
+    CHECK(wbc_add_appwindow(&s, 0, 0, &win1, &port1, NULL, &o) == WBC_OK, "kept for the desktop to come (the default)");
+    s.refuse_without_desktop = 1;   /* OS 3.2's rule */
+    CHECK(wbc_add_appicon(&s, 0, 0, "i", &port1, 0, &dobj, NULL, &o) == WBC_ERR_NODESK && !o, "refused by OS 3.2's rule");
     wbc_free_all(&s);
 }
 

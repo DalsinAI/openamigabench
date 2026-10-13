@@ -118,7 +118,10 @@ void wbc_init(struct wbc_state *s, struct wbc_env *env)
     s->next_key = 0;
     s->set.default_stack = 4096;            /* the autodoc's default */
     s->set.type_restart = 3;                /* OS 3.2.3's, measured (WorkbenchABITest, lab wblib-a) */
-    s->refuse_without_desktop = 1;          /* OS 3.2's rule (wb.doc NOTES; WorkbenchABITest) */
+    /* App objects added before the desktop is up are kept, and shown once it
+     * is (the user's decision 3, 13 October 2026). OS 3.2 refuses them
+     * instead (wb.doc NOTES; WorkbenchABITest): set this to 1 for its rule. */
+    s->refuse_without_desktop = 0;
 }
 
 void wbc_free_all(struct wbc_state *s)

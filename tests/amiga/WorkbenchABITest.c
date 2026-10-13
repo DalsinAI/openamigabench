@@ -1,13 +1,16 @@
 /* WorkbenchABITest: the Team's workbench.library lists beside OS 3.2's (step L1
  * of docs/design/Design-Open-Workbench-Library.md). It opens the system's
- * workbench.library and openwb.library (the Team's, under its test name), makes
+ * workbench.library and openbench.library (the Team's, under its test name), makes
  * the same calls through each, and prints each difference, then a count.
+ * The Team's keeps App objects added before a desktop is up (the user's
+ * decision 3), where OS 3.2's refuses them: with no Workbench running the
+ * two differ there by design.
  * For lab instances only: with OS 3.2's Workbench running, its AppIcons
  * and Tools menu items appear for a moment while the test runs.
  *
  *   WorkbenchABITest [LIB path] [ALL] [NOLIMITS] [RISKY]
  *
- * LIB: the Team's library (LIBS:openwb.library by default). ALL: print the cases
+ * LIB: the Team's library (LIBS:openbench.library by default). ALL: print the cases
  * that match too. NOLIMITS: skip filling the menus to their limits.
  * RISKY: also the calls that may crash OS 3.2's library (NULL labels,
  * NULL DiskObjects, a drop zone on no AppWindow, a handle removed twice).
@@ -578,7 +581,7 @@ int main(void)
     LONG args[A_COUNT] = { 0 };
     struct RDArgs *rda;
     struct Library *os = NULL, *ours = NULL;
-    const char *path = "LIBS:openwb.library";
+    const char *path = "LIBS:openbench.library";
     struct Window *win;
     struct MsgPort *port;
     struct DiskObject *dobj;

@@ -1,91 +1,107 @@
-# workbench.library: the Team's own, as OpenBench's face
+# workbench.library: OpenBench is the library
 
 | Document | Detail |
 | --- | --- |
 | Kind | Design |
 | Date | 13 October 2026 |
-| Status | **Draft 0.1, for the user's approval.** Nothing in it hooks Workbench yet. Step L1 (the lists, a test build under its own name, and the side-by-side test) is built with it and hooks nothing (section 8) |
-| Decision it carries out | 13 October 2026: a real `workbench.library` for Team 4, with the user's design approval before anything hooks |
-| Builds on | amigachrome `docs/design/Design-Workbench-Replacement.md` 0.2 (the shape approved on 9 October: its section 4 is this library's outline, R4 its step); amigachrome-guest `libraries/OPEN_LIBRARIES.md` ("workbench.library needs the user's design approval before it hooks anything"); OpenBench 0.1.22 (`desktop/openbench.c`); R1's proxy (`workbench/wblib.c`, `proxy/`) |
+| Status | **Version 0.2, with the user's decisions of 13 October 2026** (section 9). Version 0.1 proposed a library acting as OpenBench's face, with OS 3.2's Workbench still possible beside it. The user chose otherwise: OS 3.2's `workbench.library` is retired, and OpenBench becomes `workbench.library` itself. Nothing hooks yet. Step L1 is built and hooks nothing: the lists, a test build under its own name, and the side-by-side test. L2 is approved (section 8) |
+| Decisions it carries out | 13 October 2026: a real `workbench.library` for Team 4, its design approved before anything hooks. Then the decisions recorded on openamigabench #22 (section 9) |
+| Builds on | amigachrome `docs/design/Design-Workbench-Replacement.md` 0.2, the replacement approved on 9 October. This design takes its section 4 further, and the decisions of 13 October replace its proxy and forwarding rules for `workbench.library`. Also amigachrome-guest `libraries/OPEN_LIBRARIES.md`; OpenBench 0.1.22 (`desktop/openbench.c`); R1's proxy (`workbench/wblib.c`, `proxy/`) |
 | Marks | (measured) seen on OS 3.2.3 in lab `wblib-a` by `WorkbenchABITest`, or read from the NDK 3.2 autodoc and headers; (recorded) in a Team document; (estimate) the Team's judgement; (to record) not known yet, recorded at step L2 |
 
 > **In short**
-> - **OpenBench is the program; the library is its face.** Programs, IPrefs and `LoadWB` call `workbench.library`. The library holds what they register (AppWindows, drop zones, AppIcons, AppMenuItems) and the Workbench settings, and answers at once. What needs a desktop (drawing an AppIcon, opening a drawer, the Information window) goes to OpenBench through a private port. OpenBench never patches the library, and the library never draws.
-> - **Exactly OS 3.2's face:** the 19 entries of `wb_lib.sfd` 47.1, the same registers, the same structures and the same answers, corners included. No new entries. The library and OpenBench meet through a private interface behind the library base.
-> - **OS 3.2's Workbench stays possible.** The library starts with no desktop and keeps the settings IPrefs sends. The first desktop to come decides: OpenBench registers and the library answers itself, or `LoadWB` calls `StartWorkbench` and the library hands everything to OS 3.2's own, which it loads privately (R1's proxy). Shift at boot, a machine without RTG, and OpenBench's Quit to Workbench all still give OS 3.2's Workbench.
-> - **One voice for the Workbench settings.** The library holds them. IPrefs, WBCtrl and programs change them through the library's calls, and OpenBench reads them from the library instead of reading `ENV:Sys/Workbench.prefs` itself.
-> - **Measured first.** The list calls are built and compared with OS 3.2's in a lab, side by side under a test name. With OS 3.2's Workbench running: 114 cases, 4 differ, all four of them questions that need a desktop, which step L3 answers. With no Workbench running: 60 cases, none differ (section 7).
-> - **Ten decisions** are in section 9, each with a recommendation.
+> - **OpenBench is `workbench.library`.** OS 3.2's library is retired. One library does all of it:
+>   - it holds the lists programs register and the Workbench settings;
+>   - it answers every call;
+>   - it runs the desktop: the root window, drawers, menus, AppIcons, the Information window.
+>
+>   There is no separate desktop program to talk to, and nothing is forwarded.
+> - **OS 3.2's face, then the Team's.** The 19 entries of `wb_lib.sfd` 47.1 come first, with the same registers, structures and answers. The Team's own calls follow them, and the library is version 48.
+> - **`LoadWB` and `StartWorkbench` start OpenBench.** A second call while it runs does nothing.
+> - **There is no Quit to Workbench.** OpenBench runs until the machine is restarted or powered off.
+> - **App objects are kept before the desktop is up** and shown once it is. OS 3.2 refuses them.
+> - **One voice for the Workbench settings.** The library holds them; nothing else reads `Workbench.prefs`.
+> - **Shift at boot is the rescue:** OS 3.2's library and `LoadWB`, for that boot only. It is not a desktop to switch to.
+> - **Measured first.** The list calls are built, and compared with OS 3.2's in a lab, side by side under the test name `openbench.library`. With OS 3.2's Workbench running, 114 cases give 4 differences, all questions for the desktop that L3 answers (section 7).
 
-## 1. What this is, and what it isn't
+## 1. What this is
 
-- **It is the R4 of the approved replacement design,** worked out in detail. The replacement design (amigachrome, section 4) settled the outline: the library holds the lists, the desktop draws, proxy first, no new entries. This document turns that into calls, structures, measured answers and an order of work. It also records what has changed since 9 October:
-  - OpenBench now **boots in place of `LoadWB`** (0.1, 11 October). It isn't started by `StartWorkbench`, and on a machine without RTG it runs `LoadWB` itself (`desktop/openbench.c`). Section 4 follows from this.
-  - OpenBench already reads the Workbench prefs itself (0.1.19) and registers with Intuition itself (`AlohaWorkbench`, 0.1.22). Sections 3 and 5 say what moves.
-  - OpenBench's head comment planned to take the App calls "as Directory Opus 5 takes them", by patching. This design replaces that plan. Nothing is patched, because the library is the Team's own.
-- **It isn't `openworkbench.library`.** amigachrome's `Design-OpenWorkbench-Library.md` is a different library: the theme, rules and patch table the Open tools share. This document lives here, beside the code, rather than in amigachrome's `docs/design/`, so two near-identical names never sit in one folder. A one-line pointer from amigachrome can follow.
-- **"Hooks" means,** for this design:
+- **The Team's own `workbench.library`, which is OpenBench.** On 13 October the user retired OS 3.2's `workbench.library` in favour of OpenBench. OpenBench takes its name and offers OS 3.2's calls and the Team's extensions.
+- **What changes from the replacement design of 9 October:**
+  - There is no separate desktop process started by the library, and no private port between them: the desktop's work is in the library.
+  - There is no proxy mode for `workbench.library` and no hand-over to OS 3.2's. R1's proxy stays only as the lab tool that records OS 3.2's private calls (L2).
+  - The library is version 48, not 47.42, because the Team's calls come after OS 3.2's.
+- **What doesn't change:** OS 3.2's 19 entries keep their offsets, registers and answers. So every program written for OS 3.2's `workbench.library` works unchanged.
+- **It isn't `openworkbench.library`.** amigachrome's `Design-OpenWorkbench-Library.md` is the theme, rules and patch library the Open tools share. This design lives here, beside the code, with a pointer from amigachrome's `docs/design/` (decision 10).
+- **"Hooks" means**, for this design, any of these:
   - being installed as `LIBS:workbench.library`, in a lab or on a machine;
   - registering with Intuition;
   - any `SetFunction`;
-  - a public port or a process of its own;
-  - OpenBench registering with it.
+  - a public port;
+  - a process of the library's own.
 
-  None of that is done before the user approves this design. Step L1 does none of it (section 8).
+  L1 does none of them.
 
-## 2. The face: everything OS 3.2's workbench.library offers
+## 2. The face: OS 3.2's 19 entries
 
 ### 2.1 The entries
 
-From `wb_lib.sfd` 47.1 (measured). Bias 30. "No desktop" is what OS 3.2 answers while no Workbench runs (measured in lab `wblib-a`, with OpenBench as the desktop and OS 3.2's Workbench not started).
+From `wb_lib.sfd` 47.1 (measured). Bias 30. "OS 3.2, no Workbench" is what OS 3.2's library answers while its Workbench isn't running (measured in lab `wblib-a`).
 
-| Offset | Entry | Registers | Answered by | With no desktop | L1 |
+| Offset | Entry | Registers | The Team's library | OS 3.2, no Workbench | L1 |
 | --- | --- | --- | --- | --- | --- |
-| -30 | `UpdateWorkbench` | A0 name, A1 lock, D0 action | a note to the desktop: re-read one object | nothing happens | does nothing |
-| -36 | `QuoteWorkbench` (private) | D0 | to record (L2) | to record | 0 |
-| -42 | `StartWorkbench` (private) | D0 flags, D1 pointer | the library: section 4 | starts OS 3.2's Workbench | 0 |
-| -48 | `AddAppWindowA` | D0 id, D1 userdata, A0 window, A1 port, A2 tags | the library's list | NULL | built |
-| -54 | `RemoveAppWindow` | A0 | the library's list | FALSE | built |
-| -60 | `AddAppIconA` | D0, D1, A0 text, A1 port, A2 lock, A3 DiskObject, A4 tags | the library's list, then a note | NULL | built |
-| -66 | `RemoveAppIcon` | A0 | the library's list, then a note | FALSE | built |
-| -72 | `AddAppMenuItemA` | D0, D1, A0 text, A1 port, A2 tags | the library's list, then a note | NULL | built |
-| -78 | `RemoveAppMenuItem` | A0 | the library's list, then a note | FALSE | built |
-| -84 | `WBConfig` (private) | D0 tag, D1 value | the library keeps it and passes it on | to record | 0 |
-| -90 | `WBInfo` | A0 lock, A1 name, A2 screen | the desktop; the call waits (section 3.4) | to record | 0 |
-| -96 | `OpenWorkbenchObjectA` | A0 name, A1 tags | the desktop, with a reply | to record | 0 |
-| -102 | `CloseWorkbenchObjectA` | A0 name, A1 tags | the desktop, with a reply | to record | 0 |
-| -108 | `WorkbenchControlA` | A0 name, A1 tags | settings: the library; questions: the desktop (2.5) | settings work; questions in 2.5 | the settings |
-| -114 | `AddAppWindowDropZoneA` | A0 AppWindow, D0, D1, A1 tags | the library's list | (needs an AppWindow) | built |
-| -120 | `RemoveAppWindowDropZone` | A0 AppWindow, A1 zone | the library's list | (needs an AppWindow) | built |
-| -126 | `ChangeWorkbenchSelectionA` | A0 name, A1 hook, A2 tags | the desktop, with a reply | to record | 0 |
-| -132 | `MakeWorkbenchObjectVisibleA` | A0 name, A1 tags | the desktop, with a reply | to record | 0 |
-| -138 | `WhichWorkbenchObjectA` | A0 window, D0 x, D1 y, A1 tags | the desktop, with a reply | to record | 0 |
+| -30 | `UpdateWorkbench` | A0 name, A1 lock, D0 action | re-reads that object if its drawer is open (section 3.3) | nothing happens | does nothing |
+| -36 | `QuoteWorkbench` (private) | D0 | as OS 3.2's (to record, L2) | to record | 0 |
+| -42 | `StartWorkbench` (private) | D0 flags, D1 pointer | starts OpenBench; a second call while it runs does nothing (section 4) | starts OS 3.2's Workbench | 0 |
+| -48 | `AddAppWindowA` | D0 id, D1 userdata, A0 window, A1 port, A2 tags | the list; kept before the desktop is up | NULL | built |
+| -54 | `RemoveAppWindow` | A0 | the list | FALSE | built |
+| -60 | `AddAppIconA` | D0, D1, A0 text, A1 port, A2 lock, A3 DiskObject, A4 tags | the list; drawn on the root window | NULL | built |
+| -66 | `RemoveAppIcon` | A0 | the list | FALSE | built |
+| -72 | `AddAppMenuItemA` | D0, D1, A0 text, A1 port, A2 tags | the list; the menus are rebuilt | NULL | built |
+| -78 | `RemoveAppMenuItem` | A0 | the list | FALSE | built |
+| -84 | `WBConfig` (private) | D0 tag, D1 value | kept and applied (section 5) | to record | 0 |
+| -90 | `WBInfo` | A0 lock, A1 name, A2 screen | the library's own Information window (section 3.4) | to record | 0 |
+| -96 | `OpenWorkbenchObjectA` | A0 name, A1 tags | opens it | to record | 0 |
+| -102 | `CloseWorkbenchObjectA` | A0 name, A1 tags | closes it | to record | 0 |
+| -108 | `WorkbenchControlA` | A0 name, A1 tags | the settings and the questions (2.5) | settings work; questions in 2.5 | the settings |
+| -114 | `AddAppWindowDropZoneA` | A0 AppWindow, D0, D1, A1 tags | the list | (needs an AppWindow) | built |
+| -120 | `RemoveAppWindowDropZone` | A0 AppWindow, A1 zone | the list | (needs an AppWindow) | built |
+| -126 | `ChangeWorkbenchSelectionA` | A0 name, A1 hook, A2 tags | changes the selection | to record | 0 |
+| -132 | `MakeWorkbenchObjectVisibleA` | A0 name, A1 tags | scrolls it into view | to record | 0 |
+| -138 | `WhichWorkbenchObjectA` | A0 window, D0 x, D1 y, A1 tags | answers from its own windows | to record | 0 |
+
+**App objects before the desktop is up** (decision 3):
+
+- OS 3.2 refuses them while its Workbench isn't running (measured: NULL from every Add call).
+- The Team's library keeps them, and shows them once the desktop is up. A program that adds its AppIcon early no longer loses it. The desktop starts in the same boot, right after IPrefs, so the wait is short.
+- With no Workbench running, the Team's library answers just as OS 3.2's does once its Workbench runs (measured, section 7). `WorkbenchABITest` therefore differs from OS 3.2 there, on purpose.
 
 ### 2.2 AppWindows and drop zones (measured)
 
-- `AddAppWindowA` takes a NULL window and a NULL port: OS 3.2 returns a handle for both, and so does the Team's. Nothing is ever sent to a NULL port, and a NULL window is never under the pointer.
+- `AddAppWindowA` takes a NULL window and a NULL port, as OS 3.2's does. Nothing is ever sent to a NULL port, and a NULL window is never under the pointer.
 - A tag it doesn't know is ignored.
-- **A drop zone needs all four sides.** That is one of `WBDZA_Left` or `WBDZA_RelRight`, one of `WBDZA_Top` or `WBDZA_RelBottom`, one of `WBDZA_Width` or `WBDZA_RelWidth`, and one of `WBDZA_Height` or `WBDZA_RelHeight`. `WBDZA_Box` gives all four. Otherwise OS 3.2 returns NULL with IoErr 116 (`ERROR_REQUIRED_ARG_MISSING`).
+- **A drop zone needs all four sides.** That is one of `WBDZA_Left` or `WBDZA_RelRight`, one of `WBDZA_Top` or `WBDZA_RelBottom`, one of `WBDZA_Width` or `WBDZA_RelWidth`, and one of `WBDZA_Height` or `WBDZA_RelHeight`. `WBDZA_Box` gives all four. Otherwise the call returns NULL, with IoErr 116 (`ERROR_REQUIRED_ARG_MISSING`).
 - **The values themselves aren't checked.** A zone of width 0, of width -5, outside the window or larger than it is accepted.
 - `RemoveAppWindowDropZone`:
   - a zone of another AppWindow: FALSE, IoErr 205 (`ERROR_OBJECT_NOT_FOUND`);
   - a NULL AppWindow or a NULL zone: FALSE, IoErr 116;
-  - a zone removed: TRUE, IoErr 0.
-- Removing an AppWindow removes its zones (the autodoc, and OS 3.2's answers agree).
-- Where a zone is: worked out each time against the window's size, clipped to the window, and empty if nothing of it is left. Where two zones overlap, the first added wins (estimate; checked with real drops at L4).
+  - a zone removed: TRUE, IoErr 0;
+  - a zone removed again: FALSE, IoErr 205.
+- Removing an AppWindow removes its zones.
+- **Where a zone is** is worked out each time against the window's size. It is clipped to the window, and empty if nothing of it is left. Where two zones overlap, the first added wins (estimate; checked with real drops at L4).
 
 ### 2.3 AppIcons (measured)
 
-- A NULL port is taken. A tag it doesn't know is ignored.
-- `WBAPPICONA_SupportsOpen` is on unless turned off; the other `Supports` tags are off unless turned on (the autodoc).
-- The label is the library's own copy. The DiskObject's pictures are copied too, unless `WBAPPICONA_PropagatePosition` is given. The autodoc: "Workbench will make a copy of that DiskObject's icon imagery, allowing you to free the DiskObject". The copy is made with `DupDiskObjectA` at L3, through whichever `icon.library` is in the system. L1 keeps the program's pointer only.
-- A NULL label is taken; a NULL DiskObject gives NULL (measured, the RISKY cases of section 7.2).
+- A NULL port and a NULL label are taken. A NULL DiskObject gives NULL. A tag it doesn't know is ignored.
+- `WBAPPICONA_SupportsOpen` is on unless turned off. The other `Supports` tags are off unless turned on (the autodoc).
+- The label is the library's own copy.
+- The DiskObject's pictures are copied too, unless `WBAPPICONA_PropagatePosition` is given. The autodoc: "Workbench will make a copy of that DiskObject's icon imagery, allowing you to free the DiskObject". The copy is made with `DupDiskObjectA` at L3. L1 keeps the program's pointer only.
 
 ### 2.4 AppMenuItems (measured)
 
-| Rule | OS 3.2 |
+| Rule | OS 3.2, and the Team's |
 | --- | --- |
-| Items in the Tools menu | 62, from every program together. Workbench's own ResetWB is the 63rd. On Instance-32 OpenUpMenu's two items were already there, so a program could add 60 |
+| Items in the Tools menu | 62, from every program together; ResetWB is the 63rd. On Instance-32 OpenUpMenu's two items were already there, so a program could add 60 |
 | Sub items under one item (`WBAPPMENUA_GetKey`, then `WBAPPMENUA_UseKey`) | 31 |
 | Items under one new menu title (`WBAPPMENUA_GetTitleKey`) | 63 |
 | New menu titles | 27 |
@@ -93,34 +109,32 @@ From `wb_lib.sfd` 47.1 (measured). Bias 30. "No desktop" is what OS 3.2 answers 
 | `WBAPPMENUA_UseKey` with a key nobody gave | NULL |
 | A label of only `-`, `_` or `~` | a separator (V44), added like any item |
 | A command key already in use, or an empty one | the item is added, without the key (the autodoc) |
-| Removing a parent before its sub items | TRUE; the sub item can still be removed afterwards (TRUE) |
+| Removing a parent before its sub items | TRUE; the sub item can still be removed afterwards |
 | Removing an item | TRUE for any item that isn't NULL, even one already removed; FALSE for NULL |
 | A NULL port, a NULL label | taken (a NULL label is an empty one) |
 
-A parent shows only once it has a sub item, and a title only once it has an item (the autodoc). The desktop asks the library which items show (`wbc_menu_visible`).
+A parent shows only once it has a sub item, and a title only once it has an item (the autodoc; `wbc_menu_visible`).
 
 ### 2.5 WorkbenchControlA
 
-Each tag has one owner. "No desktop" is OS 3.2's answer while no Workbench runs, "running" while it runs (both measured).
-
-| Tags | Owner | No desktop | Running | L1 |
+| Tags | The Team's library | OS 3.2, no Workbench | OS 3.2, running | L1 |
 | --- | --- | --- | --- | --- |
-| `Get/SetDefaultStackSize` | the library | works; 4096 | works | built |
-| `Get/SetTypeRestartTime` | the library | works; 3 seconds | works | built |
-| `Get/SetGlobalFlags` (V47) | the library | works; 0 | works | built |
-| `Add/RemoveHiddenDeviceName`, `Get/FreeHiddenDeviceList` | the library | works. Names match without case. Removing a name that isn't there is TRUE | the same | built |
-| `Get/SetCopyHook`, `DeleteHook`, `TextInputHook`, `DiskInfoHook` | the library; the desktop calls them | works; all NULL | the same | built |
-| `Add/RemSetupCleanupHook` (V45) | the library's list; the desktop calls each at start, reset and quit | works; removing one twice is FALSE | the same | built |
-| `IsOpen` | the desktop | TRUE, with FALSE in the answer | TRUE, with the answer | as with no desktop |
-| `GetProgramList`, `GetSelectedIconList`, `GetOpenDrawerList`, `DuplicateSearchPath`, and their `Free` tags | the desktop | FALSE | TRUE | FALSE until L3 |
-| `RedrawAppIcon` | the desktop | to record | to record | FALSE until L3 |
-| A tag nobody knows; no tags; a NULL tag list | — | TRUE | TRUE | built |
+| `Get/SetDefaultStackSize` | the setting | works; 4096 | works | built |
+| `Get/SetTypeRestartTime` | the setting | works; 3 seconds | works | built |
+| `Get/SetGlobalFlags` (V47) | the setting | works; 0 | works | built |
+| `Add/RemoveHiddenDeviceName`, `Get/FreeHiddenDeviceList` | the setting. Names match without case; removing a name that isn't there is TRUE | works | works | built |
+| `Get/SetCopyHook`, `DeleteHook`, `TextInputHook`, `DiskInfoHook` | kept, and called where OS 3.2 calls them | works; all NULL | the same | built |
+| `Add/RemSetupCleanupHook` (V45) | a list, called at start and at shutdown; removing one twice is FALSE | works | works | built |
+| `IsOpen` | the desktop's answer | TRUE, with FALSE in the answer | TRUE, with the answer | as with no Workbench |
+| `GetProgramList`, `GetSelectedIconList`, `GetOpenDrawerList`, `DuplicateSearchPath`, and their `Free` tags | the desktop's answer | FALSE | TRUE | FALSE until L3 |
+| `RedrawAppIcon` | redraws it | to record | to record | FALSE until L3 |
+| A tag nobody knows; no tags; a NULL tag list | TRUE | TRUE | TRUE | built |
 
-The reserved tags (`WBA_Reserved1` to `79`) are OS 3.2's private ones. Which programs use which (WBCtrl's label options among them) is recorded at L2, and each is given an owner then.
+The reserved tags (`WBA_Reserved1` to `79`) are OS 3.2's private ones. Which programs use which, WBCtrl's label options among them, is recorded at L2, and each is answered then.
 
 ### 2.6 AppMessages
 
-The layout of `workbench/workbench.h`. `wb_core.h` writes it, and `openwb.c` checks every offset against the NDK when it is compiled (measured: 86 bytes with the 68k's alignment).
+The layout of `workbench/workbench.h`. `wb_core.h` writes it, and `openbench.c` checks every offset against the NDK when it is compiled (measured: 86 bytes with the 68k's alignment).
 
 | Offset | Field | Value |
 | --- | --- | --- |
@@ -136,181 +150,171 @@ The layout of `workbench/workbench.h`. `wb_core.h` writes it, and `openwb.c` che
 | 46, 50 | `am_Seconds`, `am_Micros` | when |
 | 54 | `am_Reserved[8]` | 0 |
 
-- **The reply port is the library's,** served by a small process of its own (the handler), which lives as long as the library. A program may reply late, or after OpenBench has quit, and the message still comes back to a port that exists. The handler frees the locks and the message. A program that never replies keeps its locks, as on OS 3.2.
-- **OpenBench never builds an AppMessage itself.** It asks the library to send one for an object, with the icons and the place (section 3.2), so the reply always reaches the handler.
+The reply port is the library's own. A program may reply late, and its message still comes back to a port that exists; the locks and the message are freed then. A program that never replies keeps its locks, as on OS 3.2.
 
 ### 2.7 The private calls, and who uses them
 
 | Who | What | Known |
 | --- | --- | --- |
 | `C:LoadWB` | `StartWorkbench(flags, pointer)` | that it does; what the values mean: to record |
-| IPrefs | `WBConfig(tag, value)` at boot, before any desktop, and on each prefs change; `WorkbenchControlA` for the Workbench prefs | that it does (the replacement design 1.1, from the release notes); which tags and values: to record |
+| IPrefs | `WBConfig(tag, value)` at boot, before the desktop is up, and on each prefs change; `WorkbenchControlA` for the Workbench prefs | that it does (the replacement design 1.1); which tags and values: to record |
 | WBCtrl | `WorkbenchControlA` with reserved tags (label shadow and outline) | to record |
 | icon.library | `UpdateWorkbench` when an icon is written with `ICONPUTA_NotifyWorkbench` | the autodoc |
 | anyone | `QuoteWorkbench(n)` | the SFD says it returns a string; nothing else is known: to record |
 | OpenUpMenu (the Team's) | `AddAppMenuItemA` for its OpenUp and Preferences sub-menus | measured: its two items were in OS 3.2's Tools menu |
 
-`AlohaWorkbench` is Intuition's, not this library's. OpenBench calls it today (0.1.22) and keeps calling it (section 3.1).
+Step L2 records these with `wbspy` (R1's spy) in a lab copy where R1's proxy is installed, never on an instance (decision 8).
 
-Step L2 records these with `wbspy` (R1's spy) in a lab where R1's proxy is installed: every call that `LoadWB`, IPrefs, WBCtrl, the prefs editors and DefIcons make, with their registers and results. Its log is the contract for the private entries. Installing R1 in a lab copy needs the user's word (question 8).
+## 3. One library that is the desktop
 
-## 3. OpenBench and the library: who does what
+### 3.1 What the library holds and does
 
-### 3.1 The split
+| Part | What |
+| --- | --- |
+| The lists | AppWindows and their zones, AppIcons, AppMenuItems (`wb_core`), under one `SignalSemaphore` |
+| The settings | the Workbench settings, from IPrefs, WBCtrl and programs (section 5) |
+| The desktop | OpenBench's work as it is today: the root window, the volumes, drawers in OpenDrawer's windows, menus, starting programs, the Information window, the bar, thumbnails, the built-in prefs and Tata. Its code moves from `desktop/` into the library |
+| Its processes | the desktop's process (named `Workbench`, as programs expect), its helpers (pictures, thumbnails, starting programs), and the reply port for AppMessages |
+| Intuition | `AlohaWorkbench` and the `WORKBENCH` ARexx port, as OpenBench 0.1.22 does today |
 
-| Work | The library | OpenBench |
-| --- | --- | --- |
-| The 19 entries programs call | answers them; keeps the lists and the settings | — |
-| AppWindows, drop zones | keeps them; works out a zone's box | asks the library which zone is under a drop, then asks it to send the AppMessage |
-| AppIcons | keeps them, with a copy of the pictures | draws them on the root window (calling the render hook), and their Icons menu items by `Supports` |
-| AppMenuItems | keeps them, with the limits, keys and separators | builds its menus from them, with what shows |
-| AppMessages | sends them and takes the replies (the handler) | says what was dropped or chosen, and where |
-| Settings (stack, flags, hidden devices, hooks) | holds them: one voice (section 5) | reads them; calls the copy, delete, text input and disk info hooks; calls the setup and cleanup hooks at start, reset and quit |
-| `OpenWorkbenchObjectA` and the other calls that need a desktop | sends a request and waits for the reply; fails at once when no desktop is registered | opens, closes, selects, shows, answers `WhichWorkbenchObjectA` |
-| `UpdateWorkbench` | keeps a copy of the name and a `DupLock` of the parent in a pending set (the replacement design's rule: 64 at most, then "re-read every open drawer") | re-reads that object if its drawer is open |
-| `WBInfo` | sends a request; the call waits until the window closes | opens its Information window (`ob_info.c`) in a helper process |
-| `StartWorkbench` | section 4 | — |
-| Intuition (`AlohaWorkbench`), the `Workbench` process name, the `WORKBENCH` ARexx port | — | as now (0.1.22) |
-| Drawing, the look, drawers, starting programs | — | as now |
+### 3.2 Inside the library
 
-### 3.2 How they meet
+- **A program's call never waits on drawing.** Add and Remove calls change a list under the semaphore and return. The desktop's process is told with a signal and redraws when it can. OpenBench's own work already follows this rule: nothing waits on a disk.
+- **Some calls need an answer from the desktop:** `OpenWorkbenchObjectA`, `ChangeWorkbenchSelectionA`, `MakeWorkbenchObjectVisibleA`, `WhichWorkbenchObjectA` and `WBInfo`. They can come from any task, so each is a message from the caller's task to the desktop's process. The desktop's process does the work and replies, and the caller waits for the reply.
+- **The desktop's process never calls into the library in a way that waits on itself.**
+- **The semaphore is never held while drawing or while waiting on DOS.** The desktop copies what it draws and lets go.
 
-- **No new entries.** OpenBench opens `workbench.library` like any program. It then reads a private interface behind the library base: a magic number, a version, and a table of functions (register, unregister, read the lists, send an AppMessage, take the notes). If the magic number or the version doesn't match, OpenBench works as it does today, with no App objects.
-- **Register.** OpenBench gives the library its private port. From then on the library answers as a desktop is there.
-- **Unregister** comes before OpenBench lets go of the screen at quit, so requests never wait on a desktop that has gone. Any request in hand is answered with failure.
-- **Reading the lists.** OpenBench takes the library's semaphore shared, walks the list it wants, copies what it draws, and lets go. It never holds the semaphore while drawing or waiting on DOS.
-- **Notes.** A change sets a bit (`WBC_NOTE_*`). One message goes to OpenBench while none is out, carrying every bit set since. No change is lost and the port never floods.
-- **Requests** (the calls that need a desktop) are messages with a reply. The caller waits and OpenBench answers on its own process. No call from OpenBench into the library ever waits on OpenBench.
+### 3.3 UpdateWorkbench
 
-### 3.3 More than one core
-
-The library is "anchored" in `OPEN_LIBRARIES.md`'s words: its lists belong to the 68k's world. Its state is behind one `SignalSemaphore`, never `Forbid()`, so it stays correct when callers run on other cores and their calls are carried to the anchor core.
+The caller may free the name and unlock the parent as soon as the call returns; the autodoc's own example does. So the library keeps a copy of the name and a `DupLock` of the parent in a pending set. The set holds 64 at most (estimate); beyond that, it becomes "re-read every open drawer". The desktop re-reads each object if its drawer is open.
 
 ### 3.4 WBInfo
 
-The autodoc says `WBInfo` "may be called many times by different tasks", and that it is "the LVO that Workbench calls" for its own Information window. So OpenBench's Icons > Information goes through the library's vector too. A program that replaces `WBInfo` with `SetFunction`, as the autodoc invites, then replaces OpenBench's as well. Each call is one request. OpenBench opens each window in a helper process, so several can be open at once and none blocks the desktop (question 7).
+This is the library's own Information window, which is OpenBench's `ob_info.c` today.
 
-## 4. With OS 3.2's Workbench still possible
+- The autodoc says `WBInfo` "may be called many times by different tasks", and that it is "the LVO that Workbench calls" for its own Information window.
+- So the desktop's Icons > Information goes through the library's vector too.
+- A program that replaces `WBInfo` with `SetFunction`, as the autodoc invites, then replaces the desktop's as well.
+- Each window opens in a helper process, so several can be open at once and none blocks the desktop.
 
-### 4.1 The three ways a machine runs
+### 3.5 The Team's calls, after OS 3.2's 19
 
-| | `LIBS:workbench.library` | Desktop | What the library does |
-| --- | --- | --- | --- |
-| A, today | OS 3.2's | OpenBench, or OS 3.2's Workbench | — (OpenBench has no App objects, as now) |
-| B | the Team's | OpenBench | answers itself |
-| C | the Team's | OS 3.2's Workbench (`LoadWB`) | forwards every call to OS 3.2's own, loaded privately (R1's proxy, `OpenUp.original.workbench.library`) |
+Version 48 adds the Team's calls from offset -144 on (decision 6). They are listed as each is designed. The first candidates come from OpenBench's work today:
 
-C happens whenever the Startup-Sequence or OpenBench runs `LoadWB`: Shift held at boot, a machine without RTG (OpenBench runs `LoadWB` itself), no `SYS:System/OpenBench`, `ENV:OpenBench/Desktop` set to `Hyperion`, or OpenBench's Quit to Workbench.
+| Candidate | What |
+| --- | --- |
+| A screen-mode follow call | what OpenBench's Resize to Window does today (0.1.22), for a program to ask for |
+| The benches | the several benches of the replacement design's section 5.12 |
+| The bar | the Workbench bar's see-through and hiding options (its section 5.10) |
 
-### 4.2 The first desktop decides
+Each new call gets its own row after `wb_lib.sfd`'s, an autodoc, and a test. A program that needs one opens version 48.
 
-The replacement design had each library choose its mode once, when it is first opened. That no longer fits:
+### 3.6 More than one core
 
-- IPrefs opens `workbench.library` and calls `WBConfig` before any desktop starts;
-- OpenBench decides whether it can run (RTG or not) only once it is running.
+The library is "anchored", in `OPEN_LIBRARIES.md`'s words: its lists and its desktop belong to the 68k's world. Its state is behind one `SignalSemaphore`, never `Forbid()`. So it stays correct when callers run on other cores and their calls are carried to the anchor core.
 
-So the library starts **undecided**:
+## 4. Starting, running and the rescue
 
-- **Undecided.** The list calls answer as OS 3.2's do with no desktop (NULL, FALSE). `WBConfig` and the `WorkbenchControlA` settings are kept, in the order they came.
-- **OpenBench registers.** The library answers itself (B). The settings it kept are OpenBench's to read.
-- **`StartWorkbench` is called** (`LoadWB`) while no desktop is registered. The library loads OS 3.2's library privately, replays the kept settings to it in their order, calls its `StartWorkbench`, and forwards everything from then on (C). Shift at boot, or `ENV:OpenBench/Original`, makes it forward from the first call, as the replacement design says.
-- **`StartWorkbench` while OpenBench is registered:** nothing happens, as OS 3.2's does when a Workbench already runs.
-
-Programs see one rule throughout: OS 3.2's answers, with or without a desktop (measured, section 2).
-
-### 4.3 Changing desktop without a reboot
-
-- **OpenBench's Quit to Workbench** (B to C). OpenBench unregisters. The library loads OS 3.2's privately and replays the settings. Then it **adds again every App object** programs hold, keeping each program's handle and translating it to OS 3.2's from then on. Then `LoadWB` starts OS 3.2's Workbench. Nothing a program holds is lost. The replacement design (4.5) already describes this hand-over.
-- **Back to OpenBench** (C to B): only after a reboot (question 4). OS 3.2's Workbench owns its lists once it runs, and a second hand-over is not worth its risk.
-
-### 4.4 What doesn't change
-
-- OpenBench keeps registering with Intuition (`AlohaWorkbench`) and keeps its process and port names.
-- OpenBench works with OS 3.2's `workbench.library` (A) as it does today, without App objects.
-- The library doesn't load on anything older than OS 3.2 (V47) or a 68020; the system's stays.
+- **`LoadWB` calls `StartWorkbench`, which starts OpenBench** (the desktop's process). A second call while it runs does nothing, as on OS 3.2. The Startup-Sequence may run `LoadWB`, or OpenBench as it does today; both end in the same desktop.
+- **There is no Quit to Workbench** and no other desktop to change to. OpenBench runs until the machine is restarted or powered off. A hardware power-off comes later.
+- **App objects added before the desktop is up are kept** (section 2.1).
+- **Shift at boot is the rescue.** OpenUp keeps OS 3.2's `workbench.library` in `SYS:Storage/OpenUp-Superseded/`. With Shift held at boot, that boot uses OS 3.2's library and `LoadWB`, as a machine without the Team's would. The next boot is normal again. It is a rescue, not a desktop to switch to.
+- **A machine without RTG.** OpenBench today runs `LoadWB` on a screen that isn't a true-colour RTG one. With OS 3.2's library retired, OpenBench draws on palette screens instead, using the AGA fallback it has had since 0.1. This is checked in an AGA lab at L4.
+- **What it needs:** OS 3.2 (V47) and a 68020 or better. On anything older the library refuses to load.
 
 ## 5. One voice for the Workbench settings
 
-Today two programs read the same file:
+- **The library holds the Workbench settings.** IPrefs reads `ENV:Sys/Workbench.prefs` and calls the library (`WBConfig`, `WorkbenchControlA`), as it called OS 3.2's. WBCtrl and programs call `WorkbenchControlA`.
+- **Nothing else reads `Workbench.prefs`** (decision 5). OpenBench reads it itself today (0.1.19); that work moves into the library's handling of IPrefs' calls.
+- **OpenBench's own settings** (the look, the bar, the benches) stay in `ENV:OpenBench/` and the Open preferences. None of Workbench's settings are copied there.
+- **Before the desktop is up,** IPrefs' calls are kept, and applied in the order they came when the desktop starts.
 
-- IPrefs reads `ENV:Sys/Workbench.prefs` and hands it to OS 3.2's Workbench (`WBConfig`, `WorkbenchControlA`);
-- OpenBench reads the same file itself (0.1.19) for the default stack and the hidden devices.
+## 6. Safety and versions
 
-With the library in (B), the library is the one voice:
-
-| Who | Does what |
-| --- | --- |
-| Prefs/Workbench | writes the file, as now |
-| IPrefs | reads it and calls the library, as it calls OS 3.2's |
-| WBCtrl, programs | call `WorkbenchControlA` |
-| The library | holds the settings, answers `Get`, and tells OpenBench of each change (a note) |
-| OpenBench | reads the settings from the library, never from the file. Its own settings (the look, the bar, the benches) stay in `ENV:OpenBench/` and the Open preferences, and none of Workbench's are copied there |
-
-In A, OpenBench keeps reading the file, as now. In C, OS 3.2's Workbench gets the settings through the library, as it would without it (question 5).
-
-## 6. Safety
-
-- **Nothing hooks before approval.** L1 is a library under its own name, `openwb.library`, and a test program. Neither is installed as `workbench.library` anywhere, neither registers with anything, and nothing patches anything.
+- **Nothing hooks before its step.** L1 is a library under its own name, `openbench.library`, and a test program. Neither is installed as `workbench.library` anywhere, neither registers with anything, and nothing patches anything.
+- **Version 48** (decisions 6 and 7), with the Team's name in the ID string. A program that asks for 47 or less gets OS 3.2's 19 entries, unchanged. A program that asks for 48 gets the Team's calls too.
+- **A handle is looked up, never followed.** Every handle a program gives back is searched for in the library's lists before it is used. A stale or made-up handle is answered "not found", where OS 3.2's can hang (section 7.2).
 - **The library refuses to be expunged** while a program holds one of its objects or an AppMessage is out.
-- **A handle is looked up, never followed.** Every handle a program gives back is searched for in the library's lists before it is used. A stale or made-up one is answered "not found", where OS 3.2's can hang (section 7.2).
-- **Shift at boot and `ENV:OpenBench/Original`** give OS 3.2's library and desktop (C from the start).
-- **Version.** 47.42, as OS 3.2.3's (question 6), with the Team's name in the ID string.
+- **Shift at boot** gives OS 3.2's library and `LoadWB` for that boot (section 4).
 
 ## 7. Testing
 
 ### 7.1 On the host
 
-`tests/host/test_wb_core.c`, run by `tests/host/run.sh` with the address and undefined-behaviour checkers: 126 checks on the lists, zones, menus, limits, settings, notes, running out of memory at each step, and the AppMessage's bytes. Every allocation is counted, so a leak fails the test.
+`tests/host/test_wb_core.c` runs from `tests/host/run.sh`, with the address and undefined-behaviour checkers: 128 checks. It covers:
+
+- the lists, zones, menus and limits;
+- the settings and the notes;
+- running out of memory at each step;
+- keeping objects before the desktop is up, with OS 3.2's refusal as an option;
+- the AppMessage's bytes.
+
+Every allocation is counted.
 
 ### 7.2 Side by side with OS 3.2's
 
-`tests/amiga/WorkbenchABITest` opens the system's `workbench.library` and `openwb.library` side by side, makes the same calls through each, and lists each difference. Nothing is replaced. It ran in lab `wblib-a`, a copy of Instance-32: OpenBench as the desktop, OS 3.2.3's `workbench.library` 47.42, and `openwb.library` copied into the lab's `LIBS:`.
+`tests/amiga/WorkbenchABITest` opens the system's `workbench.library` and `openbench.library` side by side. It makes the same calls through each and lists each difference. Nothing is replaced. It ran in lab `wblib-a`, a copy of Instance-32: OpenBench as the desktop, OS 3.2.3's `workbench.library` 47.42, and `openbench.library` 48.1 copied into the lab's `LIBS:`.
 
-| Run | Checks | Differ | The differences |
+| Run (`ALL RISKY`) | Checks | Differ | The differences |
 | --- | --- | --- | --- |
-| No Workbench running (OpenBench the desktop), `ALL RISKY` | 60 | 0 | — |
-| OS 3.2's Workbench running (`LoadWB` in the lab), `ALL` | 105 | 4 | `GetProgramList`, `GetSelectedIconList`, `GetOpenDrawerList` and `DuplicateSearchPath`: questions for a desktop, which L1 doesn't have |
-| OS 3.2's Workbench running, `ALL RISKY` | 114 | 4 | the same four |
+| OS 3.2's Workbench running (`LoadWB` in the lab) | 114 | 4 | `GetProgramList`, `GetSelectedIconList`, `GetOpenDrawerList` and `DuplicateSearchPath`: questions for the desktop, which L1 doesn't have |
+| No OS 3.2 Workbench running | 114 | 78 | by design (decision 3). OS 3.2's refuses every Add call, so nothing after them runs; the Team's keeps the objects and gives the answers OS 3.2's gives with its Workbench running |
 
-Rounds before these runs found and fixed eleven differences in the library: the NULL window and NULL port rules, the four sides a zone needs, IoErr 116, `RemoveHiddenDeviceName` on a missing name, an unknown `WorkbenchControlA` tag, `IsOpen` with no desktop, the type restart time's 3 seconds, a NULL menu label, and `RemoveAppMenuItem`'s answer. The Tools count is compared counting other programs' items, which the test reads from OS 3.2's own menu strip.
+Before the decisions, `openwb.library` (47.42, refusing as OS 3.2 does) gave 60 checks and 0 differences with no Workbench running. Earlier rounds found and fixed eleven differences in the library from OS 3.2's answers:
 
-**The RISKY cases** (a NULL label, a NULL DiskObject, a zone on no AppWindow, a handle removed twice) run only when asked:
+- the NULL window and NULL port rules;
+- the four sides a zone needs, and IoErr 116;
+- `RemoveHiddenDeviceName` on a missing name;
+- an unknown `WorkbenchControlA` tag;
+- `IsOpen` with no desktop;
+- the type restart time's 3 seconds;
+- a NULL menu label;
+- `RemoveAppMenuItem`'s answer.
 
-- Removing an AppWindow a second time, or an AppIcon a second time, **hangs OS 3.2's library** (measured twice: the lab stopped, and Tata later recorded "a jump to an odd address"). The test now asks those of the Team's library only, which answers FALSE.
-- Removing an AppMenuItem a second time: OS 3.2 answers TRUE, and TRUE for any item that isn't NULL. The Team's answers the same, after looking the handle up.
-- Removing a drop zone a second time: FALSE, IoErr 205, both.
-- A drop zone on a NULL AppWindow: NULL, both.
-- An AppIcon with a NULL label: taken, both. With a NULL DiskObject: NULL, both.
-- An AppMenuItem with a NULL label: taken by OS 3.2, and by the Team's, with an empty label.
+**The RISKY cases** run only when asked:
+
+- Removing an AppWindow a second time, or an AppIcon a second time, **hangs OS 3.2's library**. This was measured twice: the lab stopped, and Tata later recorded "a jump to an odd address". The test asks those of the Team's library only, which answers FALSE.
+- Removing an AppMenuItem a second time: TRUE from both.
+- Removing a drop zone a second time: FALSE, IoErr 205, from both.
+- A drop zone on a NULL AppWindow: NULL from both.
+- An AppIcon with a NULL label: taken by both. With a NULL DiskObject: NULL from both.
+- An AppMenuItem with a NULL label: taken by both (an empty label in the Team's).
 
 ### 7.3 Later
 
 - L2's `wbspy` log is the contract for the private calls.
-- L3 to L5: `WorkbenchABITest` against the library installed under its real name in a lab, with OpenBench registered; real drops on AppWindows, AppIcons and zones through Cradle's input, with screenshots; the hand-over of 4.3 with a program holding each kind of object.
+- From L3: `WorkbenchABITest` against the library installed as `workbench.library` in a lab, with real drops on AppWindows, AppIcons and zones through Cradle's input, and screenshots.
 
 ## 8. The order of work
 
 | Step | What | Hooks? | Done when |
 | --- | --- | --- | --- |
-| **L1 (this PR)** | `wb_core` (the lists, zones, menus, settings, notes, AppMessage layout); `openwb.library` under its test name; `WorkbenchABITest` | **No** | host tests pass; `WorkbenchABITest` differs only in what needs a desktop |
-| L2 | Record the private calls with `wbspy`, R1 installed in a lab copy only | In a lab only, on the user's word (question 8) | the log of `LoadWB`, IPrefs, WBCtrl, the prefs editors, DefIcons |
-| L3 | The real library: the private interface, the handler process, AppMessages, requests, the undecided start (4.2), `WBConfig`, the pictures copied for AppIcons | Yes, in a lab | `WorkbenchABITest` against it under its real name, with a test desktop that only answers |
-| L4 | OpenBench registers: AppIcons on the desktop, the Tools menu, drops on AppWindows and zones, `WBInfo` | Yes, in a lab | the App lines of the replacement design's Appendix A, with screenshots; the programs of its Appendix B with AppWindows and AppIcons |
-| L5 | One voice (section 5); the hand-over to OS 3.2's (4.3) | Yes, in a lab | IPrefs' changes reach OpenBench; Quit to Workbench with App objects out |
-| L6 | OpenUp: install with `retire`, Uninstall | On a machine, on the user's word | a clean install and uninstall; Shift at boot |
+| **L1 (this PR)** | `wb_core` (the lists, zones, menus, settings, notes, AppMessage layout); `openbench.library` under its test name; `WorkbenchABITest` | **No** | host tests pass; `WorkbenchABITest` differs only where the design says (the desktop's questions, and objects kept before the desktop is up) |
+| L2 (approved) | Record the private calls with `wbspy`: R1 installed in a lab copy only, never an instance | In a lab only | the log of `LoadWB`, IPrefs, WBCtrl, the prefs editors and DefIcons |
+| L3 | The library with the desktop in it: OpenBench's code moved into `workbench.library` 48; `StartWorkbench`; `WBConfig`; the AppMessages and their reply port; AppIcons' pictures copied | Yes, in a lab | the lab boots to OpenBench as `workbench.library`; `WorkbenchABITest` runs against it; Shift at boot gives OS 3.2's |
+| L4 | AppIcons on the desktop, the Tools menu, drops on AppWindows and zones, `WBInfo`, the questions of 2.5; an AGA lab | Yes, in a lab | the App lines of the replacement design's Appendix A, with screenshots; the programs of its Appendix B that use AppWindows and AppIcons |
+| L5 | One voice (section 5); the Team's first calls after entry 19 | Yes, in a lab | IPrefs' changes reach the desktop; each new call has its test |
+| L6 | OpenUp: install with `retire`, Uninstall, the Shift rescue | On a machine, on the user's word | a clean install and uninstall; Shift at boot from cold |
 
-## 9. Decisions for the user
+## 9. The user's decisions (13 October 2026)
 
-1. **The split** (sections 1 and 3). The library is the face (lists, settings, AppMessages, requests) and OpenBench is the program (drawing, menus, drops, windows). They meet through a private interface behind the base, and nothing is patched. *Recommended: yes.*
-2. **The first desktop decides** (4.2), instead of the library choosing at its first open. *Recommended: yes,* because IPrefs opens the library before any desktop, and OpenBench decides about RTG only once it runs.
-3. **No desktop, no App objects** (2.1). Add calls fail while no desktop runs, as OS 3.2's do (measured), rather than being kept until one comes. *Recommended: as OS 3.2,* since programs already handle it and OpenBench starts right after IPrefs.
-4. **Changing desktop without a reboot** (4.3). Keep OpenBench's Quit to Workbench, handing App objects over to OS 3.2's; go back to OpenBench only after a reboot. *Recommended: yes.*
-5. **One voice** (5). With the library in, OpenBench reads the Workbench settings only from the library. *Recommended: yes.*
-6. **Version:** 47.42, as OS 3.2.3's and as the replacement design says, rather than `OPEN_LIBRARIES.md`'s 47.100 and up. *Recommended: 47.42,* because a later OS 3.2 revision may add entries, and 47.100 would tell programs they are there.
-7. **WBInfo** (3.4). OpenBench's Information window in a helper process, the caller waiting, rather than the window's code inside the library in the caller's task (the replacement design's 4.1). *Recommended: OpenBench's,* so there is one Information window and the library stays small.
-8. **L2 in a lab.** May R1's proxy be installed as `workbench.library` in a lab copy (never an instance) to record the private calls with `wbspy`? *Recommended: yes;* without it the private calls can only be guessed.
-9. **The test name** `openwb.library`, not `openworkbench.library`, which names the theme library. *Recommended: yes.*
-10. **Where this design lives:** here in `openamigabench`, beside the code, with a pointer from amigachrome's `docs/design/`. *Recommended: yes.*
+Recorded on openamigabench #22.
+
+| # | Question | Decision |
+| --- | --- | --- |
+| 1 | The split between library and desktop | The desktop's work goes in the library: `workbench.library` is OpenBench |
+| 2 | Who decides the mode | No forwarding mode. OS 3.2's library is retired in favour of OpenBench, called `workbench.library` |
+| 3 | Add calls with no desktop | Kept until the desktop is up, not failed as OS 3.2 does |
+| 4 | Changing desktop without a reboot | There is no Quit to Workbench: only restart or power off. A hardware power-off comes later |
+| 5 | Settings | One voice: `workbench.library` holds the Workbench settings, and nothing else reads `Workbench.prefs` |
+| 6 | Extensions | The Team's calls go after OS 3.2's 19 entries, as version 48 |
+| 7 | Version | 48.x |
+| 8 | L2 in a lab | Yes: R1 in a lab copy only, never an instance |
+| — | Safe boot | Shift at boot gives OS 3.2's library and `LoadWB` for that boot only, from `SYS:Storage/OpenUp-Superseded/`. A rescue, not a desktop to switch to |
+| 9 | Test name | `openbench.library` |
+| 10 | Where the design lives | openamigabench, with a pointer from amigachrome's `docs/design/` |
+| — | `LoadWB` and `StartWorkbench` | They start OpenBench; a second call while it runs does nothing |
+| — | `WBInfo` | The library's own Information window, since the desktop is in the library |
 
 ## Sources
 

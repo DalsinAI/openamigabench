@@ -37,15 +37,15 @@ if command -v python3 >/dev/null; then
   rm -f "$OUT/OpenBench-Icons/"*.want "$OUT/OpenBench-Icons/manifest.txt" "$OUT/OpenBench-Icons/deflate.bin"
 fi
 # Step L1 (docs/design/Design-Open-Workbench-Library.md): workbench.library's
-# own lists, not switched on: openwb.library (workbench.library's table
+# own lists, not switched on: openbench.library (workbench.library's table
 # under a test name) and WorkbenchABITest, which calls it and the system's
 # side by side.
 # shellcheck disable=SC2086
 "$CC" $LIB -Wextra -c -o /dev/null "$HERE/workbench/wb_core.c"
 # shellcheck disable=SC2086
-"$CC" $LIB -o "$OUT/openwb.library" "$HERE/workbench/openwb.c" "$HERE/workbench/wb_core.c" -lgcc
-und=$("$STOVE/prefix/bin/m68k-amigaos-nm" -u "$OUT/openwb.library" || true)
-[ -z "$und" ] || { echo "undefined in openwb.library: $und" >&2; exit 1; }
+"$CC" $LIB -o "$OUT/openbench.library" "$HERE/workbench/openbench.c" "$HERE/workbench/wb_core.c" -lgcc
+und=$("$STOVE/prefix/bin/m68k-amigaos-nm" -u "$OUT/openbench.library" || true)
+[ -z "$und" ] || { echo "undefined in openbench.library: $und" >&2; exit 1; }
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/WorkbenchABITest" "$HERE/tests/amiga/WorkbenchABITest.c"
 # shellcheck disable=SC2086
@@ -55,5 +55,5 @@ und=$("$STOVE/prefix/bin/m68k-amigaos-nm" -u "$OUT/openwb.library" || true)
 "$CC" $COMMON -o "$OUT/alohaprobe" "$HERE/tools/alohaprobe.c"
 cp "$HERE/lab/Install-R1" "$HERE/lab/Uninstall-R1" "$OUT/"
 size() { wc -c < "$1" | tr -d ' '; }
-echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), alohaprobe ($(size "$OUT/alohaprobe") bytes), openicon.library ($(size "$OUT/openicon.library") bytes), iconprobe ($(size "$OUT/iconprobe") bytes), openwb.library ($(size "$OUT/openwb.library") bytes), WorkbenchABITest ($(size "$OUT/WorkbenchABITest") bytes)"
-sha256sum "$OUT/openicon.library" "$OUT/iconprobe" "$OUT/openwb.library" "$OUT/WorkbenchABITest" 2>/dev/null || true
+echo "$OUT: workbench.library ($(size "$OUT/workbench.library") bytes), icon.library ($(size "$OUT/icon.library") bytes), wbspy ($(size "$OUT/wbspy") bytes), alohaprobe ($(size "$OUT/alohaprobe") bytes), openicon.library ($(size "$OUT/openicon.library") bytes), iconprobe ($(size "$OUT/iconprobe") bytes), openbench.library ($(size "$OUT/openbench.library") bytes), WorkbenchABITest ($(size "$OUT/WorkbenchABITest") bytes)"
+sha256sum "$OUT/openicon.library" "$OUT/iconprobe" "$OUT/openbench.library" "$OUT/WorkbenchABITest" 2>/dev/null || true

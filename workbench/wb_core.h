@@ -1,6 +1,7 @@
 /* wb_core: the Team's workbench.library lists, in portable C (step L1 of
- * docs/design/Design-Open-Workbench-Library.md; R4 of amigachrome
- * docs/design/Design-Workbench-Replacement.md).
+ * docs/design/Design-Open-Workbench-Library.md). workbench.library is
+ * OpenBench itself (the user's decisions of 13 October 2026); this is the
+ * part of it that only keeps lists.
  *
  * The parts of workbench.library that only keep lists and settings:
  *   - AppWindows and their drop zones (AddAppWindowA, RemoveAppWindow,
@@ -18,7 +19,7 @@
  *   - an AppMessage's bytes, at the offsets of workbench/workbench.h.
  *
  * Nothing here includes an Amiga header, calls the system, draws, or
- * hooks anything. The same file is built into the library (openwb.c,
+ * hooks anything. The same file is built into the library (openbench.c,
  * which holds the semaphore around every call) and into the host tests
  * (tests/host/test_wb_core.c). Memory comes in through struct wbc_env.
  *
@@ -208,7 +209,7 @@ struct wbc_state {
     uint32_t next_key;              /* the next menu key */
     uint32_t notes;                 /* WBC_NOTE_ bits not yet taken by the desktop */
     struct wbc_settings set;
-    int refuse_without_desktop;     /* 1: Add calls fail while no desktop runs (OS 3.2's rule) */
+    int refuse_without_desktop;     /* 0 (the default): kept until the desktop is up; 1: OS 3.2's rule, refused */
     int desktop;                    /* 1 while a desktop is registered */
 };
 
@@ -262,7 +263,7 @@ uint32_t wbc_take_notes(struct wbc_state *s);
 
 /* An AppMessage, as the bytes the program reads (big-endian, the 68k's).
  * WBC_APPMSG_SIZE is sizeof(struct AppMessage) with the 68k's 2-byte
- * alignment; the offsets are its fields'. openwb.c checks each against the
+ * alignment; the offsets are its fields'. openbench.c checks each against the
  * NDK's struct at compile time. */
 #define WBC_APPMSG_SIZE        86
 #define WBC_AM_OFF_TYPE        20

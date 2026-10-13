@@ -18,7 +18,7 @@ Step R1, first cut: both libraries forward every entry to Hyperion's originals, 
 
 ## workbench.library (13 October 2026)
 
-`docs/design/Design-Open-Workbench-Library.md` is the design of the Team's own `workbench.library` (the replacement design's R4), waiting for the user's approval: nothing hooks before it. Step L1 is built and hooks nothing: `workbench/wb_core.c` (the lists and settings), `openwb.library` (under its own name) and `tests/amiga/WorkbenchABITest`. Its section 9 lists ten decisions; L2 (recording the private calls with `wbspy`, R1 in a lab copy) is next once question 8 is answered.
+`docs/design/Design-Open-Workbench-Library.md` (0.2) is the design of the Team's own `workbench.library`. The user decided on 13 October: OS 3.2's library is retired and `workbench.library` is OpenBench itself, version 48, with the Team's calls after OS 3.2's 19; Shift at boot gives OS 3.2's library and `LoadWB` for that boot only, as a rescue. Step L1 is built and hooks nothing: `workbench/wb_core.c` (the lists and settings), `openbench.library` (under its test name) and `tests/amiga/WorkbenchABITest`. Next is L2: R1 in a lab copy, so that `wbspy` records the private calls (approved).
 
 ## Decisions still open (design §10)
 

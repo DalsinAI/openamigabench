@@ -1,10 +1,12 @@
-/* openwb.library: the Team's workbench.library list calls, at
- * workbench.library's LVOs, under a test name (step L1 of
- * docs/design/Design-Open-Workbench-Library.md). It is opened beside the
- * system's workbench.library by tests/amiga/WorkbenchABITest, which makes
- * every call through both and lists each difference. Nothing opens it by
- * the name workbench.library, it forwards nothing, and it hooks nothing:
- * no SetFunction, no AlohaWorkbench, no public port, no process.
+/* openbench.library: the Team's workbench.library list calls, at
+ * workbench.library's LVOs, under its test name (step L1 of
+ * docs/design/Design-Open-Workbench-Library.md). workbench.library is
+ * OpenBench itself, version 48 (the user's decisions of 13 October 2026);
+ * this test build holds only its lists. It is opened beside the system's
+ * workbench.library by tests/amiga/WorkbenchABITest, which makes every call
+ * through both and lists each difference. Nothing opens it by the name
+ * workbench.library, it forwards nothing, and it hooks nothing: no
+ * SetFunction, no AlohaWorkbench, no public port, no process.
  *
  * Done here (L1), in wb_core.c: AddAppWindowA, RemoveAppWindow,
  * AddAppIconA, RemoveAppIcon, AddAppMenuItemA, RemoveAppMenuItem,
@@ -20,10 +22,9 @@
  * (QuoteWorkbench, StartWorkbench, WBConfig). They answer failure, as 3.2's
  * do while no Workbench runs, and change nothing. Step L3 and on.
  *
- * Is a desktop running? The real library knows, as the desktop registers
- * with it (the design's section 4). This test build has no desktop of its
- * own, so it asks the same question OS 3.2's is answering: is there a
- * process called "Workbench"? It only looks (FindTask under Forbid).
+ * App objects are kept whether or not a desktop runs (the user's decision
+ * 3): the desktop shows them once it is up. OS 3.2's refuses them with no
+ * Workbench running, so WorkbenchABITest differs there, by design.
  *
  * MIT, Copyright (c) 2026 Dalsin Limited. */
 #include <stddef.h>
@@ -49,18 +50,18 @@
 #define REG(r, decl) register decl __asm(#r)
 
 #ifndef LIBNAME
-#define LIBNAME "openwb.library"
+#define LIBNAME "openbench.library"
 #endif
-#define VERSION 47
-#define REVISION 42
+#define VERSION 48                  /* OS 3.2's 19 entries, the Team's after them (the user's decision 6) */
+#define REVISION 1
 
 /* First in the file: run as a program, the library returns at once. */
 __asm("\t.text\n\t.globl _owb_start\n_owb_start:\n\tmoveq #-1,d0\n\trts\n");
 
 static const char lib_name[] = LIBNAME;
-static const char lib_id[] = "workbench.library 47.42 (13.10.2026) OpenBench L1 (the Team's lists, for the side-by-side test)\r\n";
+static const char lib_id[] = "openbench.library 48.1 (13.10.2026) OpenBench L1 (the Team's lists, for the side-by-side test)\r\n";
 static const char lib_ver[] __attribute__((used)) =
-    "$VER: openwb.library 47.42 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: openbench.library 48.1 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 Dalsin Limited";
 
 /* wb_core's AppMessage offsets are the NDK's */
 #define CHECK_OFF(f, o) typedef char check_##f[offsetof(struct AppMessage, f) == (o) ? 1 : -1]
@@ -132,16 +133,6 @@ static void env_free(struct wbc_env *e, void *p)
 static void lock(void) { ObtainSemaphore(&Base->lock); }
 static void unlock(void) { ReleaseSemaphore(&Base->lock); }
 
-/* Is a Workbench running? (this test build only; see the head of the file) */
-static int desktop_here(void)
-{
-    struct Task *t;
-    Forbid();
-    t = FindTask((CONST_STRPTR)"Workbench");
-    Permit();
-    return t != NULL;
-}
-
 /* A program's tag list as the core's pairs, walked with NextTagItem
  * (TAG_MORE, TAG_SKIP and TAG_IGNORE as utility.library does them).
  * WBDZA_Box is given as its four parts. NULL if there is no memory. */
@@ -193,7 +184,6 @@ static struct AppWindow *L_AddAppWindowA(REG(d0, ULONG id), REG(d1, ULONG userda
     if (!t)
         return NULL;
     lock();
-    Base->st.desktop = desktop_here();
     wbc_add_appwindow(&Base->st, id, userdata, window, port, t, &o);
     unlock();
     FreeVec(t);
@@ -218,7 +208,6 @@ static struct AppIcon *L_AddAppIconA(REG(d0, ULONG id), REG(d1, ULONG userdata),
     if (!t)
         return NULL;
     lock();
-    Base->st.desktop = desktop_here();
     wbc_add_appicon(&Base->st, id, userdata, (const char *)text, port, (uint32_t)lk, dobj, t, &o);
     unlock();
     FreeVec(t);
@@ -245,7 +234,6 @@ static struct AppMenuItem *L_AddAppMenuItemA(REG(d0, ULONG id), REG(d1, ULONG us
     if (!t)
         return NULL;
     lock();
-    Base->st.desktop = desktop_here();
     wbc_add_appmenu(&Base->st, id, userdata, (const char *)text, port, t, &o, &key, &given);
     unlock();
     FreeVec(t);
