@@ -34,6 +34,23 @@ static void add_char(char *out, int n, int *len, unsigned char c, char q)
     add(out, n, len, buf);
 }
 
+/* Bytes as hex, then as text where they are text: 0011'..' */
+static void add_bytes(char *out, int n, int *len, const uint8_t *p, int k)
+{
+    char buf[8];
+    int i;
+    for (i = 0; i < k; i++) {
+        snprintf(buf, sizeof buf, "%02X", p[i]);
+        add(out, n, len, buf);
+    }
+    add(out, n, len, "'");
+    for (i = 0; i < k; i++) {
+        if (p[i] >= 32 && p[i] < 127) add_char(out, n, len, p[i], '\'');
+        else add(out, n, len, ".");
+    }
+    add(out, n, len, "'");
+}
+
 int spy_format(char *out, int n, const spy_line *l)
 {
     char buf[64];
@@ -81,6 +98,27 @@ int spy_format(char *out, int n, const spy_line *l)
             snprintf(buf, sizeof buf, "%s$%08lX=$%08lX", i ? ", " : "", (unsigned long)l->tags[2 * i],
                      (unsigned long)l->tags[2 * i + 1]);
             add(out, n, &len, buf);
+        }
+        add(out, n, &len, "}");
+    }
+    if (l->ntags > 0 && l->tags && l->tag_mem_len > 0 && (l->tag_mem || l->tag_mem_after)) {
+        /* what each tag's data points at: before, and after where it changed */
+        int first = 1;
+        add(out, n, &len, " tagmem={");
+        for (i = 0; i < l->ntags && i < 8; i++) {
+            const uint8_t *b = l->tag_before ? l->tag_before + i * l->tag_mem_len : NULL;
+            const uint8_t *a = l->tag_after ? l->tag_after + i * l->tag_mem_len : NULL;
+            int has_b = b && (l->tag_mem >> i & 1), has_a = a && (l->tag_mem_after >> i & 1);
+            if (!has_b && !has_a) continue;
+            snprintf(buf, sizeof buf, "%s%d:", first ? "" : ", ", i);
+            add(out, n, &len, buf);
+            first = 0;
+            if (has_b) add_bytes(out, n, &len, b, l->tag_mem_len);
+            else add(out, n, &len, "?");
+            if (has_a && (!has_b || memcmp(a, b, (size_t)l->tag_mem_len))) {
+                add(out, n, &len, ">");
+                add_bytes(out, n, &len, a, l->tag_mem_len);
+            }
         }
         add(out, n, &len, "}");
     }

@@ -38,6 +38,9 @@ if command -v python3 >/dev/null; then
 fi
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
+# r1swap: lets OS 3.2's own Workbench start under R1, for step L2 (lab only)
+# shellcheck disable=SC2086
+"$CC" $COMMON -o "$OUT/r1swap" "$HERE/tools/r1swap.c"
 # alohaprobe: what Intuition tells a Workbench, and when (the native screen mode's step 4; lab only)
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/alohaprobe" "$HERE/tools/alohaprobe.c"

@@ -29,7 +29,7 @@
 #include "spyfmt.h"
 
 static const char version[] __attribute__((used)) =
-    "$VER: wbspy 0.1 (9.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: wbspy 0.2 (13.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
 
 #define TEMPLATE "STATUS/S,START/S,ENTRIES/K/N,SAVE/K,STOP/S,WORKBENCH/S,ICON/S"
 enum { A_STATUS, A_START, A_ENTRIES, A_SAVE, A_STOP, A_WORKBENCH, A_ICON, A_COUNT };
@@ -181,7 +181,7 @@ static int save(struct ProxyBase *base[2], BPTR fh)
     ULONG n = 0, k, i, freq = 0;
     int lib, ok = 1;
     unsigned long long first = 0;
-    static char line[1024];
+    static char line[2048];
     if (!snapshot_both(base, ring)) {
         PutStr((CONST_STRPTR)"wbspy: no memory to copy the recording\n");
         SetIoErr(ERROR_NO_FREE_STORE);
@@ -230,6 +230,11 @@ static int save(struct ProxyBase *base[2], BPTR fh)
         l.tags = e->tags;
         l.nraw = e->nraw;
         l.raw = e->raw;
+        l.tag_mem = e->tag_mem;
+        l.tag_mem_after = e->tag_mem_after;
+        l.tag_mem_len = SPY_TAGMEM;
+        l.tag_before = &e->tag_before[0][0];
+        l.tag_after = &e->tag_after[0][0];
         spy_format(line, sizeof line - 1, &l);
         strcat(line, "\n");
         if (FPuts(fh, (CONST_STRPTR)line)) ok = 0;

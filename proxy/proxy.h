@@ -18,7 +18,7 @@
 #include <dos/dos.h>
 
 #define PB_MAGIC 0x4F42504EUL       /* "OBPN": an OpenBench proxy base */
-#define PB_VERSION 2                /* this layout */
+#define PB_VERSION 3                /* this layout (3: the bytes behind each tag's data, L2) */
 
 /* Where the stubs find the original's base and the spy (bytes from the base). */
 #define PB_ORIG 40
@@ -61,6 +61,7 @@ struct ProxyBase {
 #define SPY_TAGS 8
 #define SPY_RAW 32
 #define SPY_TASK 16
+#define SPY_TAGMEM 12               /* bytes kept behind each tag's data, when it points at memory */
 
 /* One call: written as it is made, completed with its result when it
  * returns (if its slot hasn't been reused by then). */
@@ -78,6 +79,14 @@ struct spy_entry {
     char str[SPY_STR];              /* the call's string argument, when it has one */
     ULONG tags[SPY_TAGS * 2];       /* its tag list, when it has one (tag, data) */
     UBYTE raw[SPY_RAW];             /* bytes behind a pointer, for the private calls */
+    /* L2: what each tag's data points at, before the call (an argument, a
+     * string) and after it (what a Get tag was answered); bit i of the
+     * masks: tag i's data pointed at memory that may be read */
+    UBYTE tag_mem;
+    UBYTE tag_mem_after;
+    UWORD pad2;
+    UBYTE tag_before[SPY_TAGS][SPY_TAGMEM];
+    UBYTE tag_after[SPY_TAGS][SPY_TAGMEM];
 };
 
 struct spy_ring {
@@ -92,7 +101,7 @@ struct spy_ring {
     ULONG seq0;                     /* sequence numbers start after this: gen << 24 */
     struct spy_entry e[1];
 };
-#define SPY_MAGIC 0x53505932UL      /* "SPY2" */
+#define SPY_MAGIC 0x53505933UL      /* "SPY3" */
 
 /* What proxy_spy_before gives the stub, and the stub gives back with the
  * result, is the call's whole sequence number: the slot follows from it

@@ -39,11 +39,13 @@ Nothing here has been run on an Amiga yet. It is for **lab instances only** unti
    SetEnv SAVE OpenBench/Spy-workbench.library 4096
    SetEnv SAVE OpenBench/Spy-icon.library 4096
    ```
-4. Reboot. Workbench should look and behave exactly as before.
+4. Reboot. Programs should behave exactly as before; OS 3.2's own Workbench needs `r1swap` (below).
 5. Check the libraries and save the recording:
    - `wbspy STATUS` shows both libraries and their originals;
    - `wbspy SAVE RAM:boot.txt` saves every call so far: `LoadWB`'s `StartWorkbench`, IPrefs' `WBConfig`s, and the rest.
 6. `Uninstall-R1` and a reboot put Hyperion's back.
+
+OS 3.2's own Workbench (`LoadWB`) fails as it starts while R1 answers to `workbench.library`. To record it anyway, copy `r1swap` to `C:`, boot with no desktop and run `r1swap ORIGINAL`, `LoadWB`, `r1swap R1` (step L2: `docs/design/L2-Workbench-Calls-Recorded.md`, logs in `tests/amiga/l2-logs/`).
 
 ## Licence
 
