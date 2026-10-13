@@ -168,6 +168,11 @@ static int load_original(struct ProxyBase *b)
         }
         lib->lib_Node.ln_Name = (char *)b->private_name;
         lib->lib_Node.ln_Type = NT_LIBRARY;
+        /* the version and ID from its RomTag, as when ramlib loads it: MakeLibrary
+         * alone left OS 3.2's at 0.42, and LoadWB, opening it directly (r1swap),
+         * stopped there: it needs 47 (L2, docs/design/L2-Workbench-Calls-Recorded.md) */
+        if (!lib->lib_Version) lib->lib_Version = rt->rt_Version;
+        if (!lib->lib_IdString) lib->lib_IdString = rt->rt_IdString;
         AddLibrary(lib);
     } else {
         /* its own init links it under its public name: taken off and renamed */
@@ -377,6 +382,23 @@ static void copy_arg(char *d, ULONG p, int n)
     d[i] = 0;
 }
 
+/* The bytes behind each tag's data that points at memory which may be read
+ * (L2: a string, a structure, a Get tag's answer); bit i of the result is
+ * tag i's. Small values (below $1000) are numbers, never read. */
+static UBYTE copy_tag_mem(struct spy_entry *e, UBYTE (*out)[SPY_TAGMEM])
+{
+    UBYTE mask = 0;
+    int i;
+    for (i = 0; i < e->ntags; i++) {
+        ULONG p = e->tags[2 * i + 1];
+        if (p >= 0x1000 && readable(p, SPY_TAGMEM)) {
+            memcpy(out[i], (const void *)p, SPY_TAGMEM);
+            mask |= (UBYTE)(1 << i);
+        }
+    }
+    return mask;
+}
+
 /* regs: d0-d7 then a0-a6, as the stub saved them; a6 is our base. The
  * token goes back to the stub, which hands it to proxy_spy_after. */
 ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
@@ -411,6 +433,7 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
         copy_arg(e->str, regs[(int)f->str_reg], SPY_STR);
     if (f->tag_reg >= 0 && regs[(int)f->tag_reg])
         e->ntags = (UBYTE)copy_tags(e->tags, (const ULONG *)regs[(int)f->tag_reg]);
+    e->tag_mem = copy_tag_mem(e, e->tag_before);
     if (f->raw_reg >= 0 && readable(regs[(int)f->raw_reg], SPY_RAW)) {
         memcpy(e->raw, (const void *)regs[(int)f->raw_reg], SPY_RAW);
         e->nraw = SPY_RAW;
@@ -436,6 +459,7 @@ void __attribute__((used)) proxy_spy_after(LONG idx, ULONG token, ULONG result, 
     if (e->idx == (UBYTE)idx && e->seq == token && !e->returned) {
         e->result = result;
         e->returned = 1;
+        e->tag_mem_after = copy_tag_mem(e, e->tag_after);
         if (b->funcs[idx].raw_result && readable(result, SPY_RAW)) {
             memcpy(e->raw, (const void *)result, SPY_RAW);
             e->nraw = SPY_RAW;

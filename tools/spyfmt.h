@@ -23,6 +23,12 @@ typedef struct spy_line {
     const uint32_t *tags;       /* ntags pairs */
     int nraw;
     const uint8_t *raw;
+    /* L2: the bytes behind each tag's data (tag i's at i * tag_mem_len),
+     * before the call and after it; bit i of a mask: tag i's were kept.
+     * After the call they are written only where they differ. */
+    unsigned tag_mem, tag_mem_after;
+    int tag_mem_len;
+    const uint8_t *tag_before, *tag_after;
 } spy_line;
 
 /* Writes the line (no newline) into out, at most n bytes with the 0. Returns

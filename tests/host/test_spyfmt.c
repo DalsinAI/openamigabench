@@ -64,6 +64,22 @@ int main(void)
     expect("a 15-column name never ends inside an escape", out,
            "000046 [fourteen chars ] icon FreeDiskObject(-90)" ZERO_REGS " -> $00000000");
 
+    /* L2: the bytes behind tags' data, before, and after only where they changed */
+    {
+        uint32_t t3[6] = { 0x8000A039, 0x07000000, 0x8000A054, 0x07000010, 0x8000A040, 1 };
+        uint8_t before[3 * 4] = { 'W', 'B', 0, 0,  0, 0, 0, 0,  0, 0, 0, 0 };
+        uint8_t after[3 * 4] = { 'W', 'B', 0, 0,  0, 0, 0, 5,  0, 0, 0, 0 };
+        memset(&l, 0, sizeof l);
+        l.seq = 47; l.time_ms = -1; l.task = "IPrefs"; l.lib = "workbench"; l.func = "WorkbenchControlA";
+        l.offset = -108; l.ntags = 3; l.tags = t3; l.returned = 1; l.result = 1;
+        l.tag_mem = 3; l.tag_mem_after = 3; l.tag_mem_len = 4; l.tag_before = before; l.tag_after = after;
+        spy_format(out, sizeof out, &l);
+        expect("tags' memory, and a Get tag's answer", out,
+               "000047 [IPrefs         ] workbench WorkbenchControlA(-108)" ZERO_REGS
+               " tags={$8000A039=$07000000, $8000A054=$07000010, $8000A040=$00000001}"
+               " tagmem={0:57420000'WB..', 1:00000000'....'>00000005'....'} -> $00000001");
+    }
+
     /* never past the buffer */
     memset(&l, 0, sizeof l);
     l.seq = 1; l.time_ms = -1; l.task = "t"; l.lib = "icon"; l.func = "FreeDiskObject"; l.offset = -90;
