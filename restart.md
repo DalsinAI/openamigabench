@@ -16,6 +16,10 @@ Step R1, first cut: both libraries forward every entry to Hyperion's originals, 
 2. `wbprobe`: every entry's cases, run against both libraries.
 3. R2: icon.library's stateless helpers taken over, then reading and writing every format.
 
+## workbench.library (13 October 2026)
+
+`docs/design/Design-Open-Workbench-Library.md` is the design of the Team's own `workbench.library` (the replacement design's R4), waiting for the user's approval: nothing hooks before it. Step L1 is built and hooks nothing: `workbench/wb_core.c` (the lists and settings), `openwb.library` (under its own name) and `tests/amiga/WorkbenchABITest`. Its section 9 lists ten decisions; L2 (recording the private calls with `wbspy`, R1 in a lab copy) is next once question 8 is answered.
+
 ## Decisions still open (design §10)
 
 4 (icon.library first, alone), 5 (classic drawer windows as an option), 6 (Delete to the trash), 7 (the desktop's canvas), 8 (Scalos), 9 (the bar's defaults).
