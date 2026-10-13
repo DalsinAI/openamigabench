@@ -38,7 +38,7 @@
 #include <proto/intuition.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.7 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.8 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *IconBase;
 struct GfxBase *GfxBase;
@@ -936,6 +936,18 @@ static void dump(const char *name)
     }
 }
 
+static UBYTE text_pen = 1, text_mode = JAM2;
+
+static void frameless_both(LONG on, LONG *was)
+{
+    IconBase = os_base;
+    if (was) IconControl(NULL, ICONCTRLA_GetGlobalFrameless, &was[0], TAG_DONE);
+    IconControl(NULL, ICONCTRLA_SetGlobalFrameless, on, TAG_DONE);
+    IconBase = our_base;
+    if (was) IconControl(NULL, ICONCTRLA_GetGlobalFrameless, &was[1], TAG_DONE);
+    IconControl(NULL, ICONCTRLA_SetGlobalFrameless, on, TAG_DONE);
+}
+
 static void one_drawing(const char *name, struct DiskObject *a, struct DiskObject *b, STRPTR label,
                         struct TagItem *tags, ULONG state)
 {
@@ -951,7 +963,9 @@ static void one_drawing(const char *name, struct DiskObject *a, struct DiskObjec
         memset(&r[k], 0x55, sizeof r[k]);
         ok[k] = GetIconRectangleA(&canvas, d[k], label, &r[k], tags);
         SetRast(&canvas, 5);
-        SetAPen(&canvas, 1);
+        SetAPen(&canvas, text_pen);
+        SetBPen(&canvas, 0);
+        SetDrMd(&canvas, text_mode);
         DrawIconStateA(&canvas, d[k], label, AT_X, AT_Y, state, tags);  /* VOID in 3.2 */
         grab(pixels[k]);
     }
@@ -1028,10 +1042,15 @@ static void drawing(void)
                     lb = LayoutIconA(b, scr, NULL);
                     num("layout says", icons[i], la, lb);
                 }
-                for (v = 0; v < 7; v++) {
+                for (v = 0; v < 9; v++) {
                     struct TagItem t[3];
                     char w[80];
-                    STRPTR label = v == 1 || v == 5 ? (STRPTR)"Label" : NULL;
+                    LONG was[2];
+                    STRPTR label = v == 1 || v == 5 || v == 7 || v == 8 ? (STRPTR)"Label" : NULL;
+#ifndef ICONDRAWA_IsLink
+                    if (v == 8)
+                        continue;
+#endif
                     t[0].ti_Tag = TAG_DONE;
                     t[1].ti_Tag = TAG_DONE;
                     t[2].ti_Tag = TAG_DONE;
@@ -1041,12 +1060,31 @@ static void drawing(void)
                     case 4: t[0].ti_Tag = ICONDRAWA_EraseBackground; t[0].ti_Data = FALSE; break;
                     case 5: t[0].ti_Tag = ICONDRAWA_DrawInfo; t[0].ti_Data = (ULONG)dri; break;
                     case 6: t[0].ti_Tag = ICONDRAWA_Frameless; t[0].ti_Data = FALSE; break;
+#ifdef ICONDRAWA_IsLink
+                    case 8: t[0].ti_Tag = ICONDRAWA_IsLink; t[0].ti_Data = TRUE; break;
+#endif
                     }
                     snprintf(w, sizeof w, "%s%s %s", icons[i] + 28, lay ? " laid out" : "",
                              (const char *const[]){ "plain", "label", "frameless", "borderless", "no erase",
-                                                    "label+drawinfo", "framed" }[v]);
+                                                    "label+drawinfo", "framed", "label pen 3 jam1",
+                                                    "link label" }[v]);
+                    /* framed: the global frameless switch is off for both libraries around it */
+                    if (v == 6)
+                        frameless_both(FALSE, was);
+                    if (v == 7) {
+                        text_pen = 3;
+                        text_mode = JAM1;
+                    }
                     for (s = 0; s < 3; s++)
                         one_drawing(w, a, b, label, t, states[s]);
+                    text_pen = 1;
+                    text_mode = JAM2;
+                    if (v == 6) {
+                        IconBase = os_base;
+                        IconControl(NULL, ICONCTRLA_SetGlobalFrameless, was[0], TAG_DONE);
+                        IconBase = our_base;
+                        IconControl(NULL, ICONCTRLA_SetGlobalFrameless, was[1], TAG_DONE);
+                    }
                 }
             }
             IconBase = os_base;
