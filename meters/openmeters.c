@@ -32,10 +32,10 @@
  * Ctrl-C quits too.
  *
  * Video RAM: openrtg.library does not yet say how much of the card's memory is in use, so that bar shows the
- * card's video RAM (the AutoConfig board's size, Dalsin $DA15 product 9 or 15) with no fill.
+ * card's video RAM (the AutoConfig board's size, AmigaChrome Team $DA15 product 9 or 15) with no fill.
  *
  * Built with opengadtools' theme reader (lib/ogt_theme.c) and openamigaprefs' Common/wbclose.h (meters/build.sh).
- * Every resource is freed on the way out. MIT, Copyright (c) 2026 Dalsin Limited. */
+ * Every resource is freed on the way out. MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <dos/dos.h>
@@ -72,7 +72,7 @@
 #include "wbclose.h"
 
 #define OPENMETERS_VERSION "0.2.2"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (12.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;

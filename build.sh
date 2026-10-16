@@ -3,7 +3,7 @@
 # in this repository). Step R1: our workbench.library and icon.library,
 # which forward every call to Hyperion's originals, and wbspy.
 #   build.sh [OUT_DIR]   (default build/os3)
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}

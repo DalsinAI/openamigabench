@@ -3,7 +3,7 @@
  * and the AppMessage's bytes. Every allocation is counted, so a leak or a
  * double free fails the test.
  *   test_wb_core
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -10,7 +10,7 @@ layouts are the published ones (OS 1.x to 3.2 DiskObject, OS 3.5 FORM
 ICON, AROS ARGB, NewIcons, AmigaOS 4/MorphOS/AROS PNG icons), as the
 Team's own readers have them (amigachrome scripts/amiga_icon.py).
 
-MIT, Copyright (c) 2026 Dalsin Limited.
+MIT, Copyright (c) 2026 AmigaChrome Team.
 """
 import os
 import random

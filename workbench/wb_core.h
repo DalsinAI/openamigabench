@@ -31,7 +31,7 @@
  * (workbench/workbench.h), and from what WorkbenchABITest measures on
  * OS 3.2.3. No code from Hyperion's or AROS's workbench.library.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef WB_CORE_H
 #define WB_CORE_H
 

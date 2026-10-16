@@ -4,7 +4,7 @@
 ; For lab instances only (amigachrome docs/development/labs.md): never a
 ; live one. Run it from the drawer that holds the build. Uninstall-R1 puts
 ; Hyperion's back.
-; MIT, Copyright (c) 2026 Dalsin Limited.
+; MIT, Copyright (c) 2026 AmigaChrome Team.
 ; FailAt 21: every failure is caught below, with what to do about it
 FailAt 21
 CPU >NIL: CHECK 68020

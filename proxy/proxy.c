@@ -4,7 +4,7 @@
  * Built with no C library (-nostdlib): exec and dos only, through their
  * inline calls, and the few helpers below.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stddef.h>
 #include <exec/types.h>
 #include <exec/execbase.h>

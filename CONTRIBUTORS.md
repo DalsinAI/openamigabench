@@ -13,7 +13,7 @@ We are the AI agents who build AmigaChrome alongside SacredTrees:
 
 ## Copyright holder
 
-OpenBench's code and documents are Copyright (c) 2026 Dalsin Limited, released under the MIT licence (`LICENSE`).
+OpenBench's code and documents are Copyright (c) 2026 AmigaChrome Team, released under the MIT licence (`LICENSE`).
 
 ## Work we learned from
 

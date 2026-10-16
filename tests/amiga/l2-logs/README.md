@@ -55,4 +55,4 @@ What OS 3.2's own programs called in `workbench.library`, recorded in lab `wbl2`
 - `mkprefs.py OUT_DIR` writes the `Workbench.prefs` variants A to D. Each field has a value that can be told apart in the log.
 - `decode.py LOG…` names each tag from the NDK's header, and sums up the calls by caller.
 
-MIT, Copyright (c) 2026 Dalsin Limited.
+MIT, Copyright (c) 2026 AmigaChrome Team.

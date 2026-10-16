@@ -63,7 +63,7 @@
  * AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them; then drag and drop between windows
  * with OpenFiles' engine.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. AROS's Wanderer and Directory Opus 5 were read for how, and no
+ * MIT, Copyright (c) 2026 AmigaChrome Team. AROS's Wanderer and Directory Opus 5 were read for how, and no
  * code was taken from them or from Hyperion's. */
 #include <stdio.h>
 #include <stdlib.h>
@@ -124,7 +124,7 @@
 #include "ogt_font.h"
 
 #define OPENBENCH_VERSION "0.1.22"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 Dalsin Limited";
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (12.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -280,7 +280,7 @@ static void thousands(char *out, int n, ULONG v)
     out[k] = 0;
 }
 
-/* The boards AmigaChrome presents through AutoConfig (Dalsin $DA15): product 9 or 15 a graphics card (ACRTG,
+/* The boards AmigaChrome presents through AutoConfig (AmigaChrome Team $DA15): product 9 or 15 a graphics card (ACRTG,
  * the 16 MiB board or the 64 MiB one; before 0.1.18 only 9 counted, so a 64 MiB machine showed GPU = 0),
  * product 7 the CPU cores board (ACSV block, CLASS 2, UNITS its cores). As OpenTitle 0.6.15 counts them. */
 static ULONG gpus, cores, isas;           /* isas: what the cores run (ISAS, $28; bit 0 m68k always) */
@@ -1430,7 +1430,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 break;
             case M_ABOUT:
                 ask("About OpenBench", "OpenBench " OPENBENCH_VERSION "\n\nOur own Workbench for AmigaOS 3.2.\n"
-                    "MIT, Copyright (c) 2026 Dalsin Limited.", "OK");
+                    "MIT, Copyright (c) 2026 AmigaChrome Team.", "OK");
                 break;
             case M_LOADWB:
             case M_QUIT:

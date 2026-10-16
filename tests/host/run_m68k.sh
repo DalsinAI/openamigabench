@@ -2,7 +2,7 @@
 # icon_core on a big-endian 68k: the host test built with an m68k Linux
 # cross compiler at -O0 and -O2 for the 68020 and 68040 and run under
 # qemu-m68k, on run.sh's fixtures (run run.sh first). Skipped without them.
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${TMPDIR:-/tmp}/openbench-host-tests

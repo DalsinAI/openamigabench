@@ -26,7 +26,7 @@
  * 3): the desktop shows them once it is up. OS 3.2's refuses them with no
  * Workbench running, so WorkbenchABITest differs there, by design.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stddef.h>
 #include <exec/types.h>
 #include <exec/resident.h>
@@ -61,7 +61,7 @@ __asm("\t.text\n\t.globl _owb_start\n_owb_start:\n\tmoveq #-1,d0\n\trts\n");
 static const char lib_name[] = LIBNAME;
 static const char lib_id[] = "openbench.library 48.1 (13.10.2026) OpenBench L1 (the Team's lists, for the side-by-side test)\r\n";
 static const char lib_ver[] __attribute__((used)) =
-    "$VER: openbench.library 48.1 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: openbench.library 48.1 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 /* wb_core's AppMessage offsets are the NDK's */
 #define CHECK_OFF(f, o) typedef char check_##f[offsetof(struct AppMessage, f) == (o) ? 1 : -1]

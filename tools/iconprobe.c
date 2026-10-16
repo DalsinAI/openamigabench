@@ -15,7 +15,7 @@
  * by Hyperion's library and compared. An object only ever goes back to
  * the library that made it.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdio.h>
 #include <string.h>
 #include <exec/types.h>
@@ -38,7 +38,7 @@
 #include <proto/intuition.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: iconprobe 0.8 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: iconprobe 0.8 (12.10.2026) OpenBench R3, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct GfxBase *GfxBase;

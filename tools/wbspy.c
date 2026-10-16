@@ -13,7 +13,7 @@
  * To record the boot as well: SetEnv SAVE OpenBench/Spy-workbench.library 4096
  * (and Spy-icon.library), reboot, then wbspy SAVE.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdlib.h>
 #include <string.h>
 #include <exec/types.h>
@@ -29,7 +29,7 @@
 #include "spyfmt.h"
 
 static const char version[] __attribute__((used)) =
-    "$VER: wbspy 0.2 (13.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: wbspy 0.2 (13.10.2026) OpenBench R1, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 #define TEMPLATE "STATUS/S,START/S,ENTRIES/K/N,SAVE/K,STOP/S,WORKBENCH/S,ICON/S"
 enum { A_STATUS, A_START, A_ENTRIES, A_SAVE, A_STOP, A_WORKBENCH, A_ICON, A_COUNT };

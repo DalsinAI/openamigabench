@@ -2,7 +2,7 @@
 # OpenBench, the desktop (desktop/openbench.c), with opengadtools' drawer window (workbench/wb_*.c) and
 # its theme and drawing (lib/), from an opengadtools checkout: OGT, default ../../opengadtools.
 #   desktop/build.sh [OUT_DIR]   (default build/os3)
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 OGT=${OGT:-$HERE/../../opengadtools}
