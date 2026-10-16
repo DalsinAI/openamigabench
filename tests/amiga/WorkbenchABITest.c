@@ -20,7 +20,7 @@
  * whether they are NULL, keys by whether they are 0, BOOLs and numbers by
  * value. INFO lines are printed and not compared.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdio.h>
 #include <string.h>
 #include <exec/types.h>
@@ -40,7 +40,7 @@
 #include <proto/wb.h>
 
 static const char version[] __attribute__((used)) =
-    "$VER: WorkbenchABITest 0.1 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: WorkbenchABITest 0.1 (13.10.2026) OpenBench L1, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *WorkbenchBase, *IconBase;
 struct IntuitionBase *IntuitionBase;

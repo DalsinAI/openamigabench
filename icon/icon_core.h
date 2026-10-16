@@ -28,7 +28,7 @@
  * tools/icons/amigaicon.py) and the autodocs' descriptions of the calls.
  * No code from Hyperion's or AROS's icon.library.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef ICON_CORE_H
 #define ICON_CORE_H
 

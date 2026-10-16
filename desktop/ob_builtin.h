@@ -14,7 +14,7 @@
  *  - it returns from its main() when it is done, everything freed, and quits on Ctrl-C (OpenBench sends it
  *    when it quits).
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef OB_BUILTIN_H
 #define OB_BUILTIN_H
 

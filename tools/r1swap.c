@@ -12,7 +12,7 @@
  * workbench.library afterwards gets R1, and wbspy records it. Nothing is
  * loaded or freed; only the two names in exec's list are exchanged.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <string.h>
 #include <exec/types.h>
 #include <exec/execbase.h>
@@ -24,7 +24,7 @@
 #include "../proxy/proxy.h"
 
 static const char version[] __attribute__((used)) =
-    "$VER: r1swap 0.1 (13.10.2026) OpenBench L2 lab tool, MIT, Copyright (c) 2026 Dalsin Limited";
+    "$VER: r1swap 0.1 (13.10.2026) OpenBench L2 lab tool, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 extern struct ExecBase *SysBase;
 

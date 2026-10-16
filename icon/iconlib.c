@@ -3,7 +3,7 @@
  * (proxy/proxy.c). It reports exactly 47.5, the version it implements
  * (amigachrome docs/design/Design-Workbench-Replacement.md, section 6).
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <exec/types.h>
 #include <exec/resident.h>
 #include <exec/nodes.h>
@@ -19,7 +19,7 @@ PROXY_START();
 
 static const char name[] = "icon.library";
 static const char id[] = "icon.library 47.5 (9.10.2026) OpenBench R1 (forwards to the original)\r\n";
-static const char ver[] __attribute__((used)) = "$VER: icon.library 47.5 (9.10.2026) OpenBench R1, MIT, Copyright (c) 2026 Dalsin Limited";
+static const char ver[] __attribute__((used)) = "$VER: icon.library 47.5 (9.10.2026) OpenBench R1, MIT, Copyright (c) 2026 AmigaChrome Team";
 
 /* Each entry: its name, and what the spy copies (proxy.h). */
 static const struct spy_func funcs[] = {

@@ -4,7 +4,7 @@ that can be told apart in wbspy's log, so each tag IPrefs passes to
 workbench.library is matched to its field (prefs/workbench.h, WBNC).
   mkprefs.py OUT_DIR    writes A.prefs to D.prefs there
 Copy one to the lab's ENV:Sys/Workbench.prefs and IPrefs applies it.
-MIT, Copyright (c) 2026 Dalsin Limited."""
+MIT, Copyright (c) 2026 AmigaChrome Team."""
 import os, struct, sys
 
 OUT = sys.argv[1]

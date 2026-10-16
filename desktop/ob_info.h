@@ -3,7 +3,7 @@
  * is the Workbench). One window for each icon asked about, each in a process of its own so the desktop goes on:
  * the icon, its name (renamed, or a disk relabelled, on Save), what it is, its size and date, the protection
  * bits, the comment, a project's default tool and the tool types, which can be edited, added and removed.
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef OB_INFO_H
 #define OB_INFO_H
 

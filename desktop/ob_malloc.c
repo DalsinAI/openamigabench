@@ -1,7 +1,7 @@
 /* ob_malloc: malloc, calloc, realloc and free for everything linked into OpenBench, from exec's AllocVec,
  * which any task may call. libnix's own heap is one per program and not safe between tasks; the dock and the
  * built-ins (ob_builtin.h) run as processes of their own inside OpenBench, so they all use these instead.
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <string.h>
 #include <exec/memory.h>
 #include <proto/exec.h>

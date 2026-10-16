@@ -4,7 +4,7 @@
 # 0.2 draws its panel as the dock draws its shelf, in the theme's colours: it links opengadtools' theme reader
 # (lib/ogt_theme.c; OGT, default ../../opengadtools) and includes openamigaprefs' Common/wbclose.h (OAP, default
 # ../../openamigaprefs), as desktop/build.sh does.
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 OGT=${OGT:-$HERE/../../opengadtools}

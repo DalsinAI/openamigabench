@@ -51,4 +51,4 @@ OS 3.2's own Workbench (`LoadWB`) fails as it starts while R1 answers to `workbe
 
 ## Licence
 
-MIT, Copyright (c) 2026 Dalsin Limited. See `LICENSE`. AROS's libraries were read for behaviour only, and no code was taken from them or from Hyperion's.
+MIT, Copyright (c) 2026 AmigaChrome Team. See `LICENSE`. AROS's libraries were read for behaviour only, and no code was taken from them or from Hyperion's.

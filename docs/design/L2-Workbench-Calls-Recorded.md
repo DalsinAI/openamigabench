@@ -185,4 +185,4 @@ IPrefs calls the library at boot, before any desktop. It calls it again each tim
 4. For OS 3.2's Workbench: boot with no desktop, then `r1swap ORIGINAL`, `Run >NIL: C:LoadWB`, wait, `r1swap R1`.
 5. To undo: copy `SYS:Storage/OpenUp-Superseded/workbench.library` back to `LIBS:` and reboot.
 
-MIT, Copyright (c) 2026 Dalsin Limited.
+MIT, Copyright (c) 2026 AmigaChrome Team.

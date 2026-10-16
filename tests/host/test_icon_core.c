@@ -4,7 +4,7 @@
  * same bytes). Then ic_inflate on deflate.bin's streams, the tool type
  * calls and the run-length coder.
  *   test_icon_core FIXTURE_DIR   (run.sh compares the dumps)
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

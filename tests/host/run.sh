@@ -2,7 +2,7 @@
 # OpenBench host tests: wbspy's lines (tools/spyfmt.c), workbench.library's
 # lists (workbench/wb_core.c), and icon.library's core (icon/icon_core.c)
 # against icons made by Python's own zlib.
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${TMPDIR:-/tmp}/openbench-host-tests

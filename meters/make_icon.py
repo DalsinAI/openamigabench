@@ -16,7 +16,7 @@ the tooltypes again.
 
 The pictures are drawn in openamigaup (tools/open_icons_art.py, openmeters,
 in the Gorilla style) and copied here; draw them there and copy them again to
-change them. Needs Pillow. MIT, Copyright (c) 2026 Dalsin Limited.
+change them. Needs Pillow. MIT, Copyright (c) 2026 AmigaChrome Team.
 """
 from __future__ import annotations
 

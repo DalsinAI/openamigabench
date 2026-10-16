@@ -4,7 +4,7 @@
  * inside its real borders (OpenFrames draws its own). Workbench 3.x's Information window, read for what it holds
  * (no code taken): name, type, size, date; Script, Archived, Readable, Writable, Executable, Deletable; comment;
  * a project's (or a disk's) default tool; a tool's or a project's tool types; Save and Cancel.
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/lists.h>

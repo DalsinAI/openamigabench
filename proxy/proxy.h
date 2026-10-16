@@ -8,7 +8,7 @@
  * The base: struct Library, then our fields at fixed offsets, because the
  * forwarding stubs read them from assembler (PB_ORIG, PB_SPY).
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef PROXY_H
 #define PROXY_H
 

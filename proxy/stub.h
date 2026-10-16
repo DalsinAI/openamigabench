@@ -14,7 +14,7 @@
  *   [idx][token][result][base][d0 d1 a0 a1][token slot][return]
  * so the token slot is 24 bytes up when the token is pushed.
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef PROXY_STUB_H
 #define PROXY_STUB_H
 
