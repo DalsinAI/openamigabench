@@ -5,7 +5,10 @@
 ; live one. Run it from the drawer that holds the build. Uninstall-R1 puts
 ; Hyperion's back.
 ; MIT, Copyright (c) 2026 Dalsin Limited.
-; FailAt 21: every failure is caught below, with what to do about it
+; FailAt 21: no failure stops the script by itself. Each command that
+; changes the disk is followed by If ERROR, which is true for a return code
+; of 10 or more (a failure's 20 too), and the script stops there saying what
+; to do.
 FailAt 21
 CPU >NIL: CHECK 68020
 If WARN
@@ -18,6 +21,10 @@ If NOT EXISTS workbench.library
 EndIf
 If NOT EXISTS SYS:Storage/OpenUp-Superseded
   MakeDir SYS:Storage/OpenUp-Superseded
+  If ERROR
+    Echo "Making SYS:Storage/OpenUp-Superseded failed. Nothing was installed."
+    Quit 20
+  EndIf
 EndIf
 ; Hyperion's own are kept there, never ours: ours say "OpenBench" in their version
 Search >NIL: LIBS:workbench.library "OpenBench" QUIET

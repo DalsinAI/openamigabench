@@ -64,6 +64,14 @@ int main(void)
     expect("a 15-column name never ends inside an escape", out,
            "000046 [fourteen chars ] icon FreeDiskObject(-90)" ZERO_REGS " -> $00000000");
 
+    /* a string longer than was kept */
+    memset(&l, 0, sizeof l);
+    l.seq = 47; l.time_ms = -1; l.task = "Workbench"; l.lib = "workbench"; l.func = "OpenWorkbenchObjectA";
+    l.offset = -96; l.str = "Work:Projects/a/long/path"; l.str_cut = 1; l.returned = 1; l.result = 1;
+    spy_format(out, sizeof out, &l);
+    expect("a cut string ends in ... after its quote", out,
+           "000047 [Workbench      ] workbench OpenWorkbenchObjectA(-96)" ZERO_REGS " \"Work:Projects/a/long/path\"... -> $00000001");
+
     /* never past the buffer */
     memset(&l, 0, sizeof l);
     l.seq = 1; l.time_ms = -1; l.task = "t"; l.lib = "icon"; l.func = "FreeDiskObject"; l.offset = -90;

@@ -2,6 +2,8 @@
 ; Hyperion's workbench.library and icon.library back in LIBS:, from
 ; SYS:Storage/OpenUp-Superseded, where Install-R1 kept them.
 ; MIT, Copyright (c) 2026 Dalsin Limited.
+; FailAt 21: no failure stops the script by itself; each copy is followed by
+; If ERROR (a return code of 10 or more), which stops it saying what to do.
 FailAt 21
 If NOT EXISTS SYS:Storage/OpenUp-Superseded/workbench.library
   Echo "Hyperion's workbench.library isn't in SYS:Storage/OpenUp-Superseded."
@@ -23,5 +25,9 @@ If ERROR
 EndIf
 If EXISTS C:wbspy
   Delete C:wbspy QUIET
+  If ERROR
+    Echo "Hyperion's libraries are back, but C:wbspy couldn't be deleted. Reboot to use them."
+    Quit 10
+  EndIf
 EndIf
 Echo "Hyperion's libraries are back. Reboot to use them."

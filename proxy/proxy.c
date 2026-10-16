@@ -365,8 +365,9 @@ static struct spy_entry *spy_slot(struct spy_ring *r)
     return e;
 }
 
-/* A string argument: as much as fits, each byte only where it may be read. */
-static void copy_arg(char *d, ULONG p, int n)
+/* A string argument: as much as fits, each byte only where it may be read.
+ * 1 when the string goes on past what was kept, so it is shown as cut. */
+static int copy_arg(char *d, ULONG p, int n)
 {
     int i = 0, whole = readable(p, (ULONG)n);   /* usually: no need to ask byte by byte */
     if (whole || readable(p, 1))
@@ -375,18 +376,21 @@ static void copy_arg(char *d, ULONG p, int n)
             i++;
         }
     d[i] = 0;
+    /* stopped by the room, not by the string's end or memory that can't be read */
+    return i == n - 1 && readable(p + i, 1) && ((const char *)p)[i] != 0;
 }
 
 /* regs: d0-d7 then a0-a6, as the stub saved them; a6 is our base. The
- * token goes back to the stub, which hands it to proxy_spy_after. */
-ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
+ * ring's generation and the call's number go back to the stub (d0 and d1,
+ * SPY_RECORD), which hands them to proxy_spy_after. */
+unsigned long long __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
 {
     struct ProxyBase *b = (struct ProxyBase *)regs[14];
     struct spy_ring *r;
     struct spy_entry *e;
     const struct spy_func *f;
     static const UBYTE keep[8] = { 0, 1, 2, 8, 9, 10, 11, 12 };    /* d0 d1 d2 a0 a1 a2 a3 a4 */
-    ULONG token;
+    unsigned long long record;
     int i;
     Forbid();
     r = b->spy;
@@ -396,7 +400,7 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
     }
     f = &b->funcs[idx];
     e = spy_slot(r);
-    token = e->seq;
+    record = SPY_RECORD(r->gen, e->seq);
     if (TimerBase) {
         struct EClockVal ev;
         ReadEClock(&ev);
@@ -408,7 +412,7 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
     for (i = 0; i < 8; i++) e->regs[i] = regs[keep[i]];
     task_name(e->task, e->task_name);
     if (f->str_reg >= 0)
-        copy_arg(e->str, regs[(int)f->str_reg], SPY_STR);
+        e->str_cut = (UBYTE)copy_arg(e->str, regs[(int)f->str_reg], SPY_STR);
     if (f->tag_reg >= 0 && regs[(int)f->tag_reg])
         e->ntags = (UBYTE)copy_tags(e->tags, (const ULONG *)regs[(int)f->tag_reg]);
     if (f->raw_reg >= 0 && readable(regs[(int)f->raw_reg], SPY_RAW)) {
@@ -416,24 +420,25 @@ ULONG __attribute__((used)) proxy_spy_before(LONG idx, ULONG *regs)
         e->nraw = SPY_RAW;
     }
     Permit();
-    return token;
+    return record;
 }
 
-/* The result, put into the call's own record, unless its slot has been
- * reused meanwhile (a long call, a small ring) or the ring has changed. */
-void __attribute__((used)) proxy_spy_after(LONG idx, ULONG token, ULONG result, struct ProxyBase *b)
+/* The result, put into the call's own record, unless the ring has changed
+ * since the call was made (another generation) or the call's slot has been
+ * reused meanwhile (a long call, a small ring: the slot holds another number). */
+void __attribute__((used)) proxy_spy_after(LONG idx, ULONG gen, ULONG seq, ULONG result, struct ProxyBase *b)
 {
     struct spy_ring *r;
     struct spy_entry *e;
-    if (!token) return;
+    if (!gen) return;
     Forbid();
     r = b->spy;
-    if (!r || r->magic != SPY_MAGIC || token <= r->seq0 || token > r->seq) {
+    if (!r || r->magic != SPY_MAGIC || r->gen != gen || !r->count) {
         Permit();
         return;
     }
-    e = &r->e[(token - r->seq0 - 1) % r->count];
-    if (e->idx == (UBYTE)idx && e->seq == token && !e->returned) {
+    e = &r->e[(seq - 1) % r->count];
+    if (e->idx == (UBYTE)idx && e->seq == seq && !e->returned) {
         e->result = result;
         e->returned = 1;
         if (b->funcs[idx].raw_result && readable(result, SPY_RAW)) {

@@ -1,6 +1,6 @@
 # Restart: OpenBench
 
-_Written 9 October 2026, when the repository was made. Read this first when work resumes; the live PR list wins if they disagree._
+_Written 9 October 2026, when the repository was made; updated 16 October. Read this first when work resumes; the live PR list wins if they disagree._
 
 ## What this repo is
 
@@ -8,7 +8,9 @@ Our own `workbench.library`, `icon.library` and desktop (OpenBench), replacing H
 
 ## Where it stands
 
-Step R1, first cut: both libraries forward every entry to Hyperion's originals, loaded privately, and wbspy records the calls. Built on the stove, not yet run in a lab.
+Step R1, first cut: both libraries forward every entry to Hyperion's originals, loaded privately, and wbspy records the calls. Not yet run in a lab.
+
+The Amiga build is Cradle's (`build-amiga.sh` with the os32 stove), on main after each merge: the Team's GitHub runner serves only the private repositories, and Cradle fetches only main. GitHub runs the host tests on every pull request.
 
 ## Next steps
 

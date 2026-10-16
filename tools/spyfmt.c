@@ -73,7 +73,7 @@ int spy_format(char *out, int n, const spy_line *l)
         const unsigned char *p = (const unsigned char *)l->str;
         add(out, n, &len, " \"");
         for (; *p; p++) add_char(out, n, &len, *p, '"');
-        add(out, n, &len, "\"");
+        add(out, n, &len, l->str_cut ? "\"..." : "\"");
     }
     if (l->ntags > 0 && l->tags) {
         add(out, n, &len, " tags={");

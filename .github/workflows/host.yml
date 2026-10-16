@@ -1,0 +1,21 @@
+# Runs the host tests on GitHub's own runner.
+#
+# The Amiga build (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this
+# repository) is not done here: this repository is public, and the Team's
+# self-hosted runner serves only its private ones. Cradle builds main with
+# its os32 stove instead (build-amiga.sh), after each merge.
+# MIT, Copyright (c) 2026 Dalsin Limited.
+name: Host tests
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Host tests
+        run: sh tests/host/run.sh

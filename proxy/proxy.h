@@ -18,7 +18,7 @@
 #include <dos/dos.h>
 
 #define PB_MAGIC 0x4F42504EUL       /* "OBPN": an OpenBench proxy base */
-#define PB_VERSION 2                /* this layout */
+#define PB_VERSION 3                /* this layout */
 
 /* Where the stubs find the original's base and the spy (bytes from the base). */
 #define PB_ORIG 40
@@ -45,7 +45,7 @@ struct ProxyBase {
     const struct spy_func *funcs;   /* each entry's name and what the spy copies (wbspy reads the names) */
     LONG error;                     /* why the original couldn't be had (IoErr, or ours below) */
     struct Library *orig_linked;    /* the original, made and linked, before it is opened */
-    UWORD spy_gen;                  /* raised each time a ring is put in: a call made into an
+    ULONG spy_gen;                  /* raised each time a ring is put in: a call made into an
                                      * older ring never writes its result into a newer one */
 };
 
@@ -57,7 +57,7 @@ struct ProxyBase {
 
 /* ---- the spy (wbspy) ---- */
 
-#define SPY_STR 48
+#define SPY_STR 80
 #define SPY_TAGS 8
 #define SPY_RAW 32
 #define SPY_TASK 16
@@ -72,6 +72,8 @@ struct spy_entry {
     UBYTE returned;                 /* 1 once the result is in */
     UBYTE ntags;
     UBYTE nraw;
+    UBYTE str_cut;                  /* 1: the string went on past what was kept */
+    UBYTE pad[3];
     ULONG regs[8];                  /* d0 d1 d2 a0 a1 a2 a3 a4 as the call was made */
     ULONG result;                   /* d0 when it returned */
     char task_name[SPY_TASK];
@@ -87,21 +89,20 @@ struct spy_ring {
     ULONG seq;                      /* the last sequence number given: the calls recorded */
     ULONG bytes;                    /* the allocation, for FreeVec's sake (AllocVec) */
     ULONG eclock_freq;              /* EClock ticks a second, 0 when there is no clock */
-    UWORD gen;                      /* the base's spy_gen when this ring was put in */
-    UWORD pad;
-    ULONG seq0;                     /* sequence numbers start after this: gen << 24 */
+    ULONG gen;                      /* the base's spy_gen when this ring was put in: never 0 */
     struct spy_entry e[1];
 };
-#define SPY_MAGIC 0x53505932UL      /* "SPY2" */
+#define SPY_MAGIC 0x53505933UL      /* "SPY3": this layout (wbspy and the libraries agree on it) */
 
 /* What proxy_spy_before gives the stub, and the stub gives back with the
- * result, is the call's whole sequence number: the slot follows from it
- * ((seq - seq0 - 1) % count), and a slot reused since, even a ring later,
- * holds another number. Each ring's numbers start at its generation << 24,
- * so a ring put in since never holds the same numbers. 0: nothing recorded. */
+ * result: the ring's generation (in d0) and the call's whole sequence number
+ * in that ring (in d1). The slot follows from the number ((seq - 1) % count);
+ * a slot reused since holds another number, and a ring put in since has
+ * another generation. A generation of 0: nothing recorded. */
+#define SPY_RECORD(gen, seq) (((unsigned long long)(gen) << 32) | (ULONG)(seq))
 
 /* Puts a ring in (under Forbid, by whoever holds it), with the next generation. */
-#define SPY_INSTALL(b, r) do { (r)->gen = ++(b)->spy_gen; (r)->seq0 = (r)->seq = (ULONG)(r)->gen << 24; \
+#define SPY_INSTALL(b, r) do { if (!++(b)->spy_gen) ++(b)->spy_gen; (r)->gen = (b)->spy_gen; \
                                (b)->spy = (r); } while (0)
 
 /* What the spy copies for each entry (indexes into the saved registers:
@@ -124,8 +125,8 @@ struct spy_func {
 #define R_A4 12
 
 /* Called by the stubs, in the caller's task, with its stack: small. */
-ULONG proxy_spy_before(LONG idx, ULONG *regs);
-void proxy_spy_after(LONG idx, ULONG token, ULONG result, struct ProxyBase *base);
+unsigned long long proxy_spy_before(LONG idx, ULONG *regs);
+void proxy_spy_after(LONG idx, ULONG gen, ULONG seq, ULONG result, struct ProxyBase *base);
 
 /* The ring for a library: a new one of n entries (AllocVec, MEMF_PUBLIC). */
 struct spy_ring *proxy_spy_new(ULONG n);

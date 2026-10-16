@@ -24,7 +24,7 @@ Nothing here has been run on an Amiga yet. It is for **lab instances only** unti
 
 ## Building
 
-`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy` and the two lab scripts to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests.
+`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy` and the two lab scripts to `build/os3/`. `build-amiga.sh` is the same build for Cradle, which builds main with its os32 stove after each merge. `tests/host/run.sh` runs the host tests, which GitHub runs on every pull request.
 
 ## Trying R1 in a lab
 

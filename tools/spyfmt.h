@@ -19,6 +19,7 @@ typedef struct spy_line {
     int returned;               /* 1: result holds what came back */
     uint32_t result;
     const char *str;            /* the string argument, or "" */
+    int str_cut;                /* 1: the string went on past str (written "..." after it) */
     int ntags;
     const uint32_t *tags;       /* ntags pairs */
     int nraw;
