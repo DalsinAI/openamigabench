@@ -294,7 +294,7 @@ static void put_back(const char *name, struct DiskObject *a, struct DiskObject *
     num("written, read back", name, ra != NULL, rb != NULL);
     if (ra && rb) {
         char w[160];
-        snprintf(w, sizeof w, "%s (written)", name);
+        snprintf(w, sizeof w, "%.140s (written)", name);   /* a label: cut long names */
         fields(w, ra, rb);
         colour_pictures(w, os_base, ra, os_base, rb);   /* both read by Hyperion's */
     }
