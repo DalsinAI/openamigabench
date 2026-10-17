@@ -28,6 +28,11 @@
  *   RAM                   show RAM: too
  *   HIDE=Name|Name        volumes not to show
  *   MAKEICON              (Shell only) write OpenMeters.info beside the program with these tooltypes, and stop
+ *   DONOTWAIT             (Workbench's, not OpenMeters') OpenMeters runs until it is quit. Started from
+ *                         SYS:WBStartup by OS 3.2.3's Workbench (C:LoadWB, as on an 8-bit or AGA screen, where
+ *                         OpenBench hands over to it) without this tooltype, Workbench waited for it: no disk icons,
+ *                         and after a while "Program 'OpenMeters' has not yet returned" (measured, lab t5-display,
+ *                         17 October 2026)
  * Drag it anywhere by any part of it. Its menu (right button while it is the active window): Refresh, Quit.
  * Ctrl-C quits too.
  *
@@ -156,7 +161,7 @@ static int make_icon(void)
 {
     static STRPTR tt[] = { (STRPTR)"CORNER=TOPRIGHT", (STRPTR)"(LEFT=40)", (STRPTR)"(TOP=40)", (STRPTR)"BARWIDTH=200",
                            (STRPTR)"REFRESH=2", (STRPTR)"(NODATE)", (STRPTR)"(NOMEMORY)", (STRPTR)"(NOVIDEO)",
-                           (STRPTR)"(NOVOLUMES)", (STRPTR)"(RAM)", (STRPTR)"(HIDE=Name|Name)", NULL };
+                           (STRPTR)"(NOVOLUMES)", (STRPTR)"(RAM)", (STRPTR)"(HIDE=Name|Name)", (STRPTR)"DONOTWAIT", NULL };
     char path[256];
     struct DiskObject *dob;
     int ok = 0;
