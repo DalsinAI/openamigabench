@@ -17,7 +17,7 @@ W="$OGT/workbench"
 L="$OGT/lib"
 D="$OAP/Dock/src"
 C="$OAP/Common"
-FLAGS="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
+FLAGS="-noixemul -m68040 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
 TMP=$(mktemp -d)
 # shellcheck disable=SC2086
 "$CC" $FLAGS -I"$D" -I"$C" -c -o "$TMP/od_dock.o" "$D/od_dock.c"

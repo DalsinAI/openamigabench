@@ -26,11 +26,11 @@ Both libraries exist as **proxies**. Each one forwards every call to Hyperion's 
 | `tools/alohaprobe` | For a lab only. `INFO` lists the Workbench screen (size, ModeID), its windows and free memory. `PROBE` registers as the Workbench (`AlohaWorkbench`) where none is, calls `CloseWorkBench()` and `OpenWorkBench()`, and lists every message Intuition sends and when. It is how OpenBench 0.1.22's Resize to Window was checked on OS 3.2.3 |
 | `lab/Install-R1`, `lab/Uninstall-R1` | Put our libraries in a lab instance with Hyperion's kept aside, and put Hyperion's back |
 
-Nothing here has been run on an Amiga yet. It is for **lab instances only** until the oracle runs in the design's §7 pass. OpenBench needs AmigaOS 3.2 and a 68020 or better (the design's §6). Both the libraries and `Install-R1` refuse anything older.
+Nothing here has been run on an Amiga yet. It is for **lab instances only** until the oracle runs in the design's §7 pass. OpenBench needs AmigaOS 3.2 and is built for the 68040. The design's §6 asks for a 68020 or better, and both the libraries and `Install-R1` still check only for that: they refuse anything older.
 
 ## Building
 
-`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openbench.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68k under qemu, where an m68k cross compiler is installed.
+`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openbench.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68040 under qemu, where an m68k cross compiler is installed.
 
 ## Trying R1 in a lab
 

@@ -10,7 +10,7 @@ STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
 OUT=${1:-$HERE/build/os3}
 mkdir -p "$OUT"
-COMMON="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
+COMMON="-noixemul -m68040 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
 # The libraries: no C library and no start code (and no loop turned into a
 # call to the memset they define themselves). Each file's first bytes
 # are its own (PROXY_START), so the order of the file's top level is kept.
