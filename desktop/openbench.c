@@ -61,7 +61,8 @@
  * It never leaves the machine without a desktop: Shift held as it starts, or a start that fails, runs
  * C:LoadWB instead (the design's proxy rule, section 4). A machine whose OpenRTG reports no RTG (no
  * openrtg.library, or a Workbench screen that isn't a true-colour RTG one) gets Workbench as usual
- * (the user, 11 October 2026). OpenBench patches nothing.
+ * (the user, 11 October 2026). Where LoadWB starts no Workbench of its own (0.1.24: the open ROM, whose
+ * LoadWB starts OpenBench), OpenBench is the desktop there too, on the palette fallback. OpenBench patches nothing.
  *
  * Next (the user's order): workbench.library's entries (OpenWorkbenchObject, AppIcons, AppWindows,
  * AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them; then drag and drop between windows
@@ -128,7 +129,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.23"
+#define OPENBENCH_VERSION "0.1.24"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (17.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -1458,6 +1459,22 @@ static void run_loadwb(void)
     }
 }
 
+/* 1 when LoadWB gave a Workbench of its own: OS 3.2.3's runs as a process named "Workbench" (FindTask,
+ * measured on the stock ROM, lab t5-display, 17 October 2026). None on the open ROM, where LoadWB starts
+ * OpenBench. */
+static int loadwb_gave;
+static int workbench_there(void)
+{
+    int i, there = 0;
+    for (i = 0; i < 10 && !there; i++) {       /* up to a second for its process to appear */
+        Forbid();
+        there = FindTask((CONST_STRPTR)"Workbench") != NULL;
+        Permit();
+        if (!there) Delay(5);
+    }
+    return there;
+}
+
 /* ---- the dock: OpenDock, the ROM's or a newer C:OpenDock -------------------------------------------------
  *
  * Dale, 17 Oct 2026: the dock is in the ROM and "only shows if there's a preferences file". OpenDock runs as a
@@ -2201,7 +2218,19 @@ static int run(void)
     if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     if (!rtg_here(look.scr)) {
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
-        goto out;                                  /* ok stays 0: LoadWB */
+        UnlockPubScreen(NULL, look.scr);
+        look.scr = NULL;
+        run_loadwb();
+        if (workbench_there()) {
+            loadwb_gave = 1;
+            goto out;                              /* ok stays 0, and LoadWB is not run again */
+        }
+        /* No Workbench came: on the open ROM, workbench.library's StartWorkbench starts OpenBench and refuses
+         * while an OpenBench process runs, so on an 8-bit RTG or an AGA screen no desktop opened at all
+         * (W33, 16 October 2026; lab t5-display, 17 October). OpenBench is then the desktop, on its palette
+         * fallback. */
+        if (run_shell) PutStr((CONST_STRPTR)"OpenBench: LoadWB started no Workbench: OpenBench on this screen\n");
+        if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     }
     if (!(idcmp = CreateMsgPort())) goto out;
     look.port = idcmp;
@@ -2410,7 +2439,7 @@ out:
         while ((lm = GetMsg(pub))) ReplyMsg(lm);   /* ok stays 0: not opened */
         DeleteMsgPort(pub);
     }
-    if (!ok || quit_to_wb) run_loadwb();            /* never left without a desktop */
+    if ((!ok && !loadwb_gave) || quit_to_wb) run_loadwb();   /* never left without a desktop */
     return ok ? RETURN_OK : RETURN_FAIL;
 }
 
