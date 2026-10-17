@@ -60,7 +60,7 @@ static struct Library *ours_base;      /* items in OS 3.2's Tools menu before th
 static void rec(const char *name, LONG v)
 {
     if (cur->n < MAXREC) {
-        strncpy(cur->r[cur->n].name, name, sizeof cur->r[0].name - 1);
+        snprintf(cur->r[cur->n].name, sizeof cur->r[0].name, "%.59s", name);   /* names are cut at 59 */
         cur->r[cur->n].v = v;
         cur->n++;
     }
