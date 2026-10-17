@@ -129,7 +129,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.24"
+#define OPENBENCH_VERSION "0.1.25"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (17.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -898,7 +898,20 @@ static BPTR parent_and_name(const char *path, char *name, int n)
 {
     BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ), p;
     const char *fp = (const char *)FilePart((STRPTR)path);
-    if (!l) return 0;
+    if (!l) {
+        /* 0.1.25: a project that is only its icon, as SYS:System/Shell is (Shell.info, default tool
+         * SYS:System/CLI, no file Shell): its WBArg is its drawer and its name, as Workbench gives it. Before,
+         * no lock meant no start: OpenDock's "wb System:System/Shell" button and a double-click on the Shell
+         * icon opened nothing (lab t5-events, W53, Dale's disk: ob_open answered 0) */
+        char dir[256];
+        int k = (int)((const char *)PathPart((STRPTR)path) - path);
+        if (!*fp || k >= (int)sizeof dir) return 0;
+        memcpy(dir, path, (size_t)k);
+        dir[k] = 0;
+        if (!(p = Lock((CONST_STRPTR)dir, ACCESS_READ))) return 0;
+        snprintf(name, (size_t)n, "%s", fp);
+        return p;
+    }
     p = ParentDir(l);
     UnLock(l);
     snprintf(name, (size_t)n, "%s", fp);
