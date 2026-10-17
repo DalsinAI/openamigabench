@@ -5,6 +5,9 @@
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Soft float: the specs file links libnix's soft libm020 (maths through the
+# mathieee libraries), not libm881, so one build runs on every 68040.
+SPECS="-specs=$(cd "$HERE/.." && pwd)/toolchain/m68k-soft-m68040.specs"
 OGT=${OGT:-$HERE/../../opengadtools}
 STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
@@ -17,7 +20,7 @@ W="$OGT/workbench"
 L="$OGT/lib"
 D="$OAP/Dock/src"
 C="$OAP/Common"
-FLAGS="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
+FLAGS="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
 TMP=$(mktemp -d)
 # shellcheck disable=SC2086
 "$CC" $FLAGS -I"$D" -I"$C" -c -o "$TMP/od_dock.o" "$D/od_dock.c"

@@ -1,7 +1,7 @@
 #!/bin/sh
 # icon_core on a big-endian 68k: the host test built with an m68k Linux
-# cross compiler at -O0 and -O2 for the 68020 and 68040 and run under
-# qemu-m68k, on run.sh's fixtures (run run.sh first). Skipped without them.
+# cross compiler at -O0 and -O2 for the 68040 and run under
+# qemu-m68k -cpu m68040, on run.sh's fixtures (run run.sh first). Skipped without them.
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -11,7 +11,7 @@ QEMU=${QEMU_M68K:-qemu-m68k}
 command -v "$CC" >/dev/null && command -v "$QEMU" >/dev/null || { echo "skipped: no $CC or $QEMU"; exit 0; }
 [ -f "$OUT/icons/manifest.txt" ] || { echo "run tests/host/run.sh first"; exit 1; }
 bad=0
-for cpu in 68020 68040; do
+for cpu in 68040; do
   for opt in -O0 -O2; do
     "$CC" -m$cpu $opt -std=gnu99 -Wall -Wextra -Werror -static -I"$HERE/icon" \
       "$HERE/icon/icon_core.c" "$HERE/tests/host/test_icon_core.c" -o "$OUT/test_icon_core.m68k"

@@ -6,11 +6,14 @@
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Soft float: the specs file links libnix's soft libm020 (maths through the
+# mathieee libraries), not libm881, so one build runs on every 68040.
+SPECS="-specs=$HERE/toolchain/m68k-soft-m68040.specs"
 STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
 OUT=${1:-$HERE/build/os3}
 mkdir -p "$OUT"
-COMMON="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
+COMMON="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
 # The libraries: no C library and no start code (and no loop turned into a
 # call to the memset they define themselves). Each file's first bytes
 # are its own (PROXY_START), so the order of the file's top level is kept.
