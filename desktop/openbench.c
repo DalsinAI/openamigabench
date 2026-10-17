@@ -46,6 +46,10 @@
  *     the Workbench screen at the size the host's window asks for, and the 2-second timer does it when a page
  *     asks the Amiga to follow now (openrtg's ASK). Another program's window blocks it, as it blocks any
  *     reset: a requester names them, with Try Again and Cancel;
+ *   - the ROM's prefs editors and dock (0.1.23; Dale, 17 October 2026, rom-blended.md M4): SYS:Prefs's window
+ *     lists ROM:Prefs's editors it has no file for, with the ROM's icons, and starting one runs ROM:'s; one in
+ *     SYS:Prefs runs itself only when its version is higher. The dock is no longer built in: OpenDock (the
+ *     ROM's, or a newer C:OpenDock) is started by name when ENV:OpenDock/Dock is there;
  * Window frames are OpenFrames' (OpenLook), as on every window.
  *
  * RTG first (the user, 11 October 2026): OpenBench is made for true-colour screens, where windows and
@@ -57,7 +61,7 @@
  * It never leaves the machine without a desktop: Shift held as it starts, or a start that fails, runs
  * C:LoadWB instead (the design's proxy rule, section 4). A machine whose OpenRTG reports no RTG (no
  * openrtg.library, or a Workbench screen that isn't a true-colour RTG one) gets Workbench as usual
- * (the user, 11 October 2026). Where LoadWB starts no Workbench of its own (0.1.23: the open ROM, whose
+ * (the user, 11 October 2026). Where LoadWB starts no Workbench of its own (0.1.24: the open ROM, whose
  * LoadWB starts OpenBench), OpenBench is the desktop there too, on the palette fallback. OpenBench patches nothing.
  *
  * Next (the user's order): workbench.library's entries (OpenWorkbenchObject, AppIcons, AppWindows,
@@ -118,13 +122,14 @@
 #endif
 #include "wb_drawer.h"
 #include "wb_dir.h"
+#include "wb_fmt.h"
 #include "wb_thumb.h"
 #include "wb_pic.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.23"
+#define OPENBENCH_VERSION "0.1.24"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (17.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -1091,11 +1096,212 @@ static int tata_lets(const char *path, int data)
 #endif
 }
 
+/* ---- ROM:Prefs: the ROM's prefs editors in SYS:Prefs's window (rom-blended.md, M4) ---------------------------
+ *
+ * ROM: (amigachrome-guest commands/rom/ROMVOL.md) holds our prefs editors in ROM:Prefs, with their icons.
+ * SYS:Prefs's drawer window lists each one SYS:Prefs has no file of that name for, with the ROM's icon; a
+ * listing is answered from ROM:'s index, so nothing is unpacked until one is started. Starting one runs
+ * ROM:'s copy. An editor that is in SYS:Prefs runs itself when its version is higher than ROM:'s; otherwise
+ * ROM:'s runs. With no ROM: everything is as before. wb_dir.c (opengadtools) is compiled with its
+ * wb_dir_read and wb_entry_icon renamed *_disk (desktop/build.sh); the two below wrap them. */
+#define ROM_PREFS "ROM:Prefs"
+
+static int quiet_exists(const char *path);
+
+static int same_name(const char *a, const char *b)
+{
+    for (; *a && *b; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        if (x != y) return 0;
+    }
+    return *a == *b;
+}
+
+/* A file's version, (version << 16) | revision, from its $VER line; 0 when it has none. A file on ROM: is
+ * asked of ROM:'s handler (its private packet 0x4F430006, as Version does), so its group stays packed; the
+ * handler answers the line without its "$VER: " (commands/rom/romvol_core.cpp). */
+static ULONG file_version(const char *path)
+{
+    static char buf[1024];
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR old = me->pr_WindowPtr;
+    struct DevProc *dp;
+    struct MsgPort *romport = NULL;
+    BPTR fh;
+    char *v = NULL;
+    const char *t;
+    ULONG ver = 0, rev = 0;
+    me->pr_WindowPtr = (APTR)-1;
+    if ((dp = GetDeviceProc((CONST_STRPTR)"ROM:", NULL))) { romport = dp->dvp_Port; FreeDeviceProc(dp); }
+    fh = Open((CONST_STRPTR)path, MODE_OLDFILE);
+    me->pr_WindowPtr = old;
+    if (!fh) return 0;
+    if (romport && ((struct FileHandle *)BADDR(fh))->fh_Type == romport) {
+        memset(buf, 0, sizeof buf);
+        if (DoPkt(romport, 0x4F430006, ((struct FileHandle *)BADDR(fh))->fh_Arg1, (LONG)buf, sizeof buf - 1, 0, 0))
+            v = buf;
+    } else {
+        LONG n, keep = 0;
+        while (!v && (n = Read(fh, buf + keep, sizeof buf - 1 - keep)) > 0) {
+            LONG i, len = keep + n;
+            for (i = 0; i + 5 <= len; i++)
+                if (!memcmp(buf + i, "$VER:", 5)) {
+                    /* the line may go on past the buffer: what is here, then the rest */
+                    memmove(buf, buf + i, (size_t)(len - i));
+                    len -= i;
+                    if ((n = Read(fh, buf + len, sizeof buf - 1 - len)) > 0) len += n;
+                    buf[len] = 0;
+                    v = buf + 5;                   /* after "$VER:" */
+                    break;
+                }
+            if (!v) {                              /* "$VER" may be cut at the end: keep its 4 bytes */
+                keep = len < 4 ? len : 4;
+                memmove(buf, buf + len - keep, (size_t)keep);
+            }
+        }
+    }
+    Close(fh);
+    if (!v) return 0;
+    /* "name 1.2 (date)": the first number after a space */
+    for (t = v; *v && *v != '\n' && *v != '\r'; v++)
+        if (v > t && v[-1] == ' ' && *v >= '0' && *v <= '9') {
+            for (; *v >= '0' && *v <= '9'; v++) ver = ver * 10 + (ULONG)(*v - '0');
+            if (*v == '.') for (v++; *v >= '0' && *v <= '9'; v++) rev = rev * 10 + (ULONG)(*v - '0');
+            return (ver & 0xFFFF) << 16 | (rev & 0xFFFF);
+        }
+    return 0;
+}
+
+/* 1 when path names the SYS:Prefs drawer itself, however it is spelt (SYS:Prefs, System:Prefs, DH0:Prefs). */
+static int is_sys_prefs(const char *path)
+{
+    static char last[WB_PATH_MAX];
+    static int last_is;
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR old;
+    BPTR a, b;
+    int is = 0;
+    if (!strcmp(path, last)) return last_is;
+    old = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;
+    if ((a = Lock((CONST_STRPTR)path, ACCESS_READ))) {
+        if ((b = Lock((CONST_STRPTR)"SYS:Prefs", ACCESS_READ))) {
+            is = SameLock(a, b) == LOCK_SAME;
+            UnLock(b);
+        }
+        UnLock(a);
+    }
+    me->pr_WindowPtr = old;
+    strlcpy(last, path, sizeof last);
+    last_is = is;
+    return is;
+}
+
+/* ROM:Prefs/NAME when SYS:Prefs/NAME isn't there and ROM:Prefs/NAME is: an entry the window lists from ROM:. */
+static int rom_entry(const wb_dir *d, int i, char *out, int n)
+{
+    char sys[WB_PATH_MAX];
+    if (d->e[i].drawer || !is_sys_prefs(d->path)) return 0;
+    wb_entry_path(d, i, sys, sizeof sys);
+    snprintf(out, (size_t)n, ROM_PREFS "/%s", d->e[i].name);
+    return !quiet_exists(sys) && quiet_exists(out);
+}
+
+/* What starting path runs: 1 ROM:'s editor (its path in out), 2 the file in SYS:Prefs itself (its version is
+ * higher than ROM:'s), 0 as before (no ROM: copy, or not in SYS:Prefs). */
+static int rom_prefs_target(const char *path, char *out, int n)
+{
+    char dir[WB_PATH_MAX];
+    size_t k = (size_t)((const char *)PathPart((CONST_STRPTR)path) - path);
+    if (k >= sizeof dir) return 0;
+    memcpy(dir, path, k);
+    dir[k] = 0;
+    if (!is_sys_prefs(dir)) return 0;
+    snprintf(out, (size_t)n, ROM_PREFS "/%s", (const char *)FilePart((CONST_STRPTR)path));
+    if (!quiet_exists(out)) return 0;
+    if (quiet_exists(path) && file_version(path) > file_version(out)) return 2;
+    return 1;
+}
+
+int wb_dir_read_disk(wb_dir *d, const char *path, int show_all);
+struct DiskObject *wb_entry_icon_disk(wb_dir *d, int i, struct Screen *scr);
+
+/* The drawer as wb_dir reads it, and in SYS:Prefs the ROM's editors it has no file for. */
+int wb_dir_read(wb_dir *d, const char *path, int show_all)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR old;
+    BPTR l;
+    struct FileInfoBlock *fib;
+    int i, added = 0;
+    if (!wb_dir_read_disk(d, path, show_all)) return 0;
+    if (!is_sys_prefs(path)) return 1;
+    old = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;
+    l = Lock((CONST_STRPTR)ROM_PREFS, ACCESS_READ);
+    me->pr_WindowPtr = old;
+    if (!l) return 1;
+    if ((fib = AllocDosObject(DOS_FIB, NULL))) {
+        if (Examine(l, fib) && fib->fib_DirEntryType > 0)
+            while (ExNext(l, fib)) {
+                const char *name = (const char *)fib->fib_FileName;
+                size_t len = strlen(name);
+                char info[WB_NAME_MAX + 16];
+                wb_entry *x;
+                if (fib->fib_DirEntryType > 0 || (len > 5 && same_name(name + len - 5, ".info"))) continue;
+                for (i = 0; i < d->n && !same_name(d->e[i].name, name); i++) ;
+                if (i < d->n) continue;            /* SYS:Prefs has one of that name */
+                snprintf(info, sizeof info, ROM_PREFS "/%s.info", name);
+                if (!show_all && !quiet_exists(info)) continue;   /* as on a disk: only those with icons */
+                if (d->n == d->cap) {
+                    int nc = d->cap ? d->cap * 2 : 16;
+                    wb_entry *ne = realloc(d->e, (size_t)nc * sizeof *ne);
+                    if (!ne) break;
+                    d->e = ne;
+                    d->cap = nc;
+                }
+                x = &d->e[d->n++];
+                memset(x, 0, sizeof *x);
+                strlcpy(x->name, name, sizeof x->name);
+                x->has_icon = 1;
+                x->size = (ULONG)fib->fib_Size;
+                x->days = fib->fib_Date.ds_Days;
+                x->mins = fib->fib_Date.ds_Minute;
+                x->items = -1;
+                x->kind = wb_kind(x->name, 0, 0);
+                added++;
+            }
+        FreeDosObject(DOS_FIB, fib);
+    }
+    UnLock(l);
+    if (added) wb_dir_sort(d, d->sort, d->desc);
+    return 1;
+}
+
+/* An entry listed from ROM: gets ROM:'s icon (ROM:Prefs/NAME.info); the others as wb_dir gives them. */
+struct DiskObject *wb_entry_icon(wb_dir *d, int i, struct Screen *scr)
+{
+    char rp[WB_PATH_MAX], keep[WB_PATH_MAX];
+    struct DiskObject *o;
+    if (d->e[i].icon || d->e[i].tried || !rom_entry(d, i, rp, sizeof rp))
+        return wb_entry_icon_disk(d, i, scr);
+    strlcpy(keep, d->path, sizeof keep);
+    strlcpy(d->path, ROM_PREFS, sizeof d->path);
+    o = wb_entry_icon_disk(d, i, scr);
+    strlcpy(d->path, keep, sizeof d->path);
+    return o;
+}
+
 static int ob_open_object(const char *path)
 {
     struct DiskObject *o;
-    int ok = 0;
-    if (ob_builtin_open(path)) return 1;          /* built into OpenBench (ob_builtin_list.h): ours, never asked about */
+    char rp[WB_PATH_MAX];
+    int ok = 0, rom = 0;
+    switch (rom_prefs_target(path, rp, sizeof rp)) {
+    case 1: path = rp; rom = 1; break;            /* ROM:'s editor: ours, as a built-in, never asked about */
+    case 2: break;                                 /* SYS:Prefs's newer file itself */
+    default: if (ob_builtin_open(path)) return 1;  /* built into OpenBench (ob_builtin_list.h): ours, never asked about */
+    }
     o = GetIconTags((CONST_STRPTR)path, ICONGETA_FailIfUnavailable, TRUE, TAG_DONE);
     if (!o) {
         BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
@@ -1105,14 +1311,14 @@ static int ob_open_object(const char *path)
         if (fib) FreeDosObject(DOS_FIB, fib);
         if (l) UnLock(l);
         if (dir) return open_drawer(path);
-        return is_program(path) && tata_lets(path, 0) ? start_tool(path, NULL, 8192) : 0;
+        return is_program(path) && (rom || tata_lets(path, 0)) ? start_tool(path, NULL, 8192) : 0;
     }
     switch (o->do_Type) {
     case WBDISK: case WBDRAWER: case WBGARBAGE:
         ok = open_drawer(path);
         break;
     case WBTOOL:
-        ok = tata_lets(path, 0) && start_tool(path, NULL, o->do_StackSize);
+        ok = (rom || tata_lets(path, 0)) && start_tool(path, NULL, o->do_StackSize);
         break;
     case WBPROJECT: {
         char tool[300];
@@ -1269,51 +1475,66 @@ static int workbench_there(void)
     return there;
 }
 
-/* ---- the dock: OpenDock's code, built in (the user, 11 October 2026: "integrate the dock into
- * OpenWorkbench and not as a separate app") ------------------------------------------------------
+/* ---- the dock: OpenDock, the ROM's or a newer C:OpenDock -------------------------------------------------
  *
- * It runs as a process of OpenBench's own, its window just above the backdrop, and starts things
- * through OpenBench (obmsg.h). An OpenDock started on its own (S:User-Startup) is asked to quit first. */
-int opendock_main(void);
-static struct Task *volatile dock_task;
-static BYTE dock_sig = -1;
+ * Dale, 17 Oct 2026: the dock is in the ROM and "only shows if there's a preferences file". OpenDock runs as a
+ * program of its own, started here by name, so the Shell finds the ROM's (ROM:C/OpenDock) or a newer
+ * C:OpenDock (the ROM's interceptor, by $VER). It is started only when ENV:OpenDock/Dock is there (the
+ * Startup-sequence has put ENVARC: in ENV: by now) and none runs (its port, "OpenDock"): with no settings file
+ * nothing starts, and the ROM's copy stays packed. OpenDock 0.6.6 ends at once when one runs already (an old
+ * "Run >NIL: C:OpenDock" in User-Startup), and its editor starts it when its settings are saved. It starts
+ * things through OpenBench (obmsg.h) and takes OpenLook's close notice, as it did before it was built in. */
 
-static void dock_entry(void)
+/* The dock's process, or NULL. Under Forbid. */
+static struct Task *dock_task(void)
 {
-    Forbid();
-    dock_task = FindTask(NULL);
-    Permit();
-    opendock_main();
-    Forbid();
-    dock_task = NULL;
-    Signal(main_task, 1UL << dock_sig);
-    /* ends in dos.library under Forbid */
+    struct MsgPort *p = FindPort((CONST_STRPTR)"OpenDock");
+    return p ? p->mp_SigTask : NULL;
+}
+
+/* 1 when path is there; no requester while we look (ROM: on a ROM without it, say). */
+static int quiet_exists(const char *path)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR old = me->pr_WindowPtr;
+    BPTR l;
+    me->pr_WindowPtr = (APTR)-1;
+    l = Lock((CONST_STRPTR)path, ACCESS_READ);
+    me->pr_WindowPtr = old;
+    if (l) UnLock(l);
+    return l != 0;
 }
 
 static void start_dock(void)
 {
-    struct MsgPort *p;
-    int i;
-    for (i = 0; i < 30; i++) {                     /* the separate OpenDock: asked to go, 3 s at most */
-        Forbid();
-        if ((p = FindPort((CONST_STRPTR)"OpenDock"))) Signal(p->mp_SigTask, SIGBREAKF_CTRL_C);
-        Permit();
-        if (!p) break;
-        Delay(5);
-    }
-    if (i == 30 || dock_sig < 0) return;
-    if (!CreateNewProcTags(NP_Entry, (ULONG)dock_entry, NP_StackSize, 32768, NP_Name, (ULONG)"OpenBench Dock", TAG_DONE))
-        return;
-    for (i = 0; i < 50 && !dock_task; i++) Delay(1);
+    BPTR in, out;
+    struct Task *t;
+    if (!quiet_exists("ENV:OpenDock/Dock")) return;
+    Forbid();
+    t = dock_task();
+    Permit();
+    if (t) return;
+    in = Open((CONST_STRPTR)"NIL:", MODE_OLDFILE);
+    out = Open((CONST_STRPTR)"NIL:", MODE_NEWFILE);
+    if (in && out && SystemTags((CONST_STRPTR)"OpenDock", SYS_Input, (ULONG)in, SYS_Output, (ULONG)out,
+                                SYS_Asynch, TRUE, NP_StackSize, 32768, TAG_DONE) != -1)
+        return;                                    /* the handles are the dock's now */
+    if (in) Close(in);
+    if (out) Close(out);
 }
 
+/* OpenBench's quit: the dock goes with the desktop, as the built-in one did (3 s at most). */
 static void stop_dock(void)
 {
     int i;
-    Forbid();
-    if (dock_task) Signal((struct Task *)dock_task, SIGBREAKF_CTRL_C);
-    Permit();
-    for (i = 0; i < 250 && dock_task; i++) Delay(2);
+    for (i = 0; i < 150; i++) {
+        struct Task *t;
+        Forbid();
+        if ((t = dock_task()) && !i) Signal(t, SIGBREAKF_CTRL_C);
+        Permit();
+        if (!t) break;
+        Delay(1);
+    }
 }
 
 /* ---- the run --------------------------------------------------------------------------------- */
@@ -1706,7 +1927,7 @@ static int openlook_running(void)
 /* 1 when task t is OpenBench's: its own process, the dock, an Information window's. Under Forbid. */
 static int task_ours(struct Task *t)
 {
-    return t && (t == main_task || t == (struct Task *)dock_task ||
+    return t && (t == main_task || t == dock_task() ||
                  (t->tc_Node.ln_Name && !strcmp(t->tc_Node.ln_Name, "OpenBench Information")));
 }
 
@@ -1772,11 +1993,12 @@ static void tell_dock(LONG what)
     struct WBNRoot *r;
     struct MinNode *n;
     struct WBNClient *c = NULL;
+    struct Task *dt;
     int i;
     Forbid();
-    if (dock_task && (r = wbn_root()))
+    if ((dt = dock_task()) && (r = wbn_root()))
         for (n = r->clients.mlh_Head; n->mln_Succ; n = n->mln_Succ)
-            if (((struct WBNClient *)n)->task == (struct Task *)dock_task) { c = (struct WBNClient *)n; break; }
+            if (((struct WBNClient *)n)->task == dt) { c = (struct WBNClient *)n; break; }
     if (c) {
         if (what == WBC_CLOSE) c->ack = 0;
         c->want = what;
@@ -1786,7 +2008,7 @@ static void tell_dock(LONG what)
     for (i = 0; c && what == WBC_CLOSE && i < 150; i++) {
         int done;
         Forbid();
-        done = !dock_task || c->ack;               /* the record goes with the dock */
+        done = !dock_task() || c->ack;             /* the record goes with the dock */
         Permit();
         if (done) break;
         Delay(1);
@@ -1993,7 +2215,6 @@ static int run(void)
     if (!IconBase) goto out;
     if (!(launch_port = CreateMsgPort())) goto out;
     if ((picture_sig = AllocSignal(-1)) < 0) goto out;
-    dock_sig = AllocSignal(-1);
     if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     if (!rtg_here(look.scr)) {
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
@@ -2042,7 +2263,7 @@ static int run(void)
     wb_thumb_start();                           /* the drawers' thumbnails (0.2); none: pictures show their icons */
     for (;;) {
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
-                          (1UL << pub->mp_SigBit) | (dock_sig >= 0 ? 1UL << dock_sig : 0) |
+                          (1UL << pub->mp_SigBit) |
                           (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
                           SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
@@ -2205,7 +2426,6 @@ out:
         DeleteMsgPort(launch_port);
     }
     if (picture_sig >= 0) FreeSignal(picture_sig);
-    if (dock_sig >= 0) FreeSignal(dock_sig);
     if (idcmp) DeleteMsgPort(idcmp);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
     if (WorkbenchBase) CloseLibrary(WorkbenchBase);
