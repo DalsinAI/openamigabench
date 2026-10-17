@@ -7,13 +7,16 @@
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Soft float: the specs file links libnix's soft libm020 (maths through the
+# mathieee libraries), not libm881, so one build runs on every 68040.
+SPECS="-specs=$(cd "$HERE/.." && pwd)/toolchain/m68k-soft-m68040.specs"
 OGT=${OGT:-$HERE/../../opengadtools}
 OAP=${OAP:-$HERE/../../openamigaprefs}
 STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
-"$CC" -noixemul -m68040 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common \
+"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common \
     -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" -lamiga
 echo "OpenMeters: $(wc -c < "$OUT/OpenMeters") bytes"
 # its icon, OpenMeters.info beside it: a frosted panel of bars, a GlowIcon in the Open family's style, with the
