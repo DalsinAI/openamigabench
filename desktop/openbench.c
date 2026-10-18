@@ -137,7 +137,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.26"
+#define OPENBENCH_VERSION "0.1.27"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (18.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
