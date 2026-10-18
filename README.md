@@ -30,7 +30,7 @@ Nothing here has been run on an Amiga yet. It is for **lab instances only** unti
 
 ## Building
 
-`build.sh` builds with the Team's os32 stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository). It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openbench.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68040 under qemu, where an m68k cross compiler is installed.
+`build.sh` builds with the Team's os32-gcc16 stove (m68k-amigaos-gcc 16 and NDK 3.2; the NDK is never in this repository), as `desktop/build.sh` and `meters/build.sh` do, and stops when given an older GCC. It writes `workbench.library`, `icon.library`, `wbspy`, `alohaprobe`, the two lab scripts, and the side-by-side builds (`openicon.library` with `iconprobe`, `openbench.library` with `WorkbenchABITest`) to `build/os3/`. Pull requests are built on the Team's runner. `tests/host/run.sh` runs the host tests, and `tests/host/run_m68k.sh` runs icon_core's again on a big-endian 68040 under qemu, where an m68k cross compiler is installed.
 
 `desktop/build.sh` builds OpenBench itself, with the os32-gcc16 stove (`OS32_GCC16`, else `STOVE`) and `-fno-tree-loop-distribute-patterns`; it stops when given an older GCC, since the os32 stove's GCC 6.5.0b miscompiles a word clear followed by a long one at -O2. It needs opengadtools, openamigaprefs and openamigafilemanager checkouts beside this one (`OGT`, `OAP`, `FILES`), and openamigatata's for Tata built in (`TATA`).
 

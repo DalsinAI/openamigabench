@@ -233,8 +233,7 @@ static row *add_row(const char *label, int kind)
     row *r;
     if (nrows >= MAX_ROWS) return NULL;
     r = &rows[nrows++];
-    strncpy(r->label, label, sizeof r->label - 1);
-    r->label[sizeof r->label - 1] = 0;
+    strlcpy(r->label, label, sizeof r->label);
     r->kind = kind;
     r->fill = 0;
     r->value[0] = 0;
@@ -320,7 +319,7 @@ static void volume_rows(void)
         BPTR l;
         if (hidden(v[i].name)) continue;
         if (!opt.ram && !Stricmp((STRPTR)v[i].name, (STRPTR)"RAM Disk")) continue;
-        snprintf(path, sizeof path, "%s:", v[i].name);
+        if (snprintf(path, sizeof path, "%s:", v[i].name) >= (int)sizeof path) continue;   /* no volume's name is so long */
         if (!(l = Lock((STRPTR)path, ACCESS_READ))) continue;
         if (Info(l, id) && id->id_NumBlocks > 0 && id->id_BytesPerBlock > 0) {
             unsigned long long bpb = (unsigned long long)id->id_BytesPerBlock;

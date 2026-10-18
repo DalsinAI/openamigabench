@@ -1,12 +1,13 @@
-# Builds OpenBench on the Team's self-hosted runner, which has the os32
-# stove (m68k-amigaos-gcc and NDK 3.2; the NDK is never in this repository),
+# Builds OpenBench on the Team's self-hosted runner, which has the os32-gcc16
+# stove (m68k-amigaos-gcc 16 and NDK 3.2; the NDK is never in this repository),
 # and runs the host tests on GitHub's own runner. The compiler's messages
 # show on the pull request as annotations; the build is the run's artifact.
 #
 # This repository is public, so the self-hosted job runs only for pushes
 # and for pull requests from branches of this repository, never for a
 # fork's: a fork's code never runs on the Team's machine.
-# The stove is $OS32_STOVE on the runner, else ~/AmigaChrome/stoves/os32.
+# The stove is $OS32_GCC16 on the runner, else ~/AmigaChrome/stoves/os32-gcc16
+# (build.sh stops when given the os32 stove's GCC 6.5).
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 name: Build on the stove
 on:
@@ -24,9 +25,9 @@ jobs:
       - name: Build
         shell: bash
         run: |
-          export STOVE="${OS32_STOVE:-$HOME/AmigaChrome/stoves/os32}"
+          export STOVE="${OS32_GCC16:-$HOME/AmigaChrome/stoves/os32-gcc16}"
           if [ ! -x "$STOVE/prefix/bin/m68k-amigaos-gcc" ]; then
-            echo "::error::No os32 stove at $STOVE (set OS32_STOVE on the runner)"
+            echo "::error::No os32-gcc16 stove at $STOVE (set OS32_GCC16 on the runner)"
             exit 1
           fi
           mkdir -p build/os3
