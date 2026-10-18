@@ -1,6 +1,8 @@
 #!/bin/sh
 # OpenBench, the desktop (desktop/openbench.c), with opengadtools' drawer window (workbench/wb_*.c) and
-# its theme and drawing (lib/), from an opengadtools checkout: OGT, default ../../opengadtools.
+# its theme and drawing (lib/), from an opengadtools checkout: OGT, default ../../opengadtools; and OpenFiles'
+# copy engine (engine/of_*.c), for drag and drop (0.1.26, ob_drop.c), from an openamigafilemanager checkout:
+# FILES, default ../../openamigafilemanager.
 #   desktop/build.sh [OUT_DIR]   (default build/os3)
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
@@ -144,12 +146,27 @@ BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_WINDOWS"
 # shellcheck disable=SC2086
 # shellcheck disable=SC2086
 "$CC" $FLAGS -c -o "$TMP/ob_info.o" "$HERE/ob_info.c"
+# Drag and drop (0.1.26): ob_drop.c, with OpenFiles' engine built for the Amiga (-DOF_AMIGA: its memory from
+# AllocVec, as it runs in a process of its own)
+FILES=${FILES:-$HERE/../../openamigafilemanager}
+E="$FILES/engine"
+[ -f "$E/of_ops.c" ] || { echo "desktop/build.sh: no openamigafilemanager at $FILES (set FILES)" >&2; exit 1; }
+echo "OpenBench: OpenFiles' engine from $FILES ($(cd "$FILES" && git rev-parse --short HEAD 2>/dev/null || echo 'not a git checkout'))"
+DROP_OBJS=""
+for f in of_ops of_path of_fs_amiga of_alloc_amiga; do
+    # shellcheck disable=SC2086
+    "$CC" $FLAGS -DOF_AMIGA -I"$E" -c -o "$TMP/$f.o" "$E/$f.c"
+    DROP_OBJS="$DROP_OBJS $TMP/$f.o"
+done
+# shellcheck disable=SC2086
+"$CC" $FLAGS -DOF_AMIGA -I"$E" -I"$W" -I"$L" -c -o "$TMP/ob_drop.o" "$HERE/ob_drop.c"
+DROP_OBJS="$DROP_OBJS $TMP/ob_drop.o"
 # wb_dir with its wb_dir_read and wb_entry_icon as *_disk: openbench.c's wrap them, for ROM:Prefs's editors in
 # SYS:Prefs's window (0.1.23)
 # shellcheck disable=SC2086
 "$CC" $FLAGS -I"$W" -I"$L" -Dwb_dir_read=wb_dir_read_disk -Dwb_entry_icon=wb_entry_icon_disk -c -o "$TMP/wb_dir.o" "$W/wb_dir.c"
 # shellcheck disable=SC2086
-"$CC" $FLAGS $OB_TATA_DEFS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS \
+"$CC" $FLAGS $OB_TATA_DEFS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS $DROP_OBJS \
     "$W/wb_drawer.c" "$TMP/wb_dir.o" "$W/wb_fmt.c" "$W/wb_pic.c" "$W/wb_glyph.c" "$W/wb_thumb.c" \
     "$L/ogt_theme.c" "$L/ogt_draw.c" "$L/ogt_icons.c" "$L/ogt_font.c" "$TMP/od_dock.o" -lamiga
 rm -rf "$TMP"

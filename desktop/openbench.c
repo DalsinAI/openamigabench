@@ -64,9 +64,16 @@
  * (the user, 11 October 2026). Where LoadWB starts no Workbench of its own (0.1.24: the open ROM, whose
  * LoadWB starts OpenBench), OpenBench is the desktop there too, on the palette fallback. OpenBench patches nothing.
  *
- * Next (the user's order): workbench.library's entries (OpenWorkbenchObject, AppIcons, AppWindows,
- * AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them; then drag and drop between windows
- * with OpenFiles' engine.
+ *   - drag and drop (0.1.26, W67; Dale, 18 October 2026: "dragging icons 'into' windows"): icons dragged out of
+ *     a drawer window (its own picture under the pointer, several at once when several are selected) into
+ *     another drawer window or onto a drawer's or a disk's icon are moved on one volume and copied to
+ *     another, with OpenFiles' engine (openamigafilemanager engine/), in a process of its own with a Stop
+ *     button; a disk's icon dragged from the desktop into a drawer window has its contents copied; icons
+ *     let go over a program's AppWindow reach it as an AppMessage, as from OS 3.2.3's Workbench
+ *     (ob_drop.c; workbench.library takes AddAppWindowA while OpenBench says it delivers them).
+ *
+ * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
+ * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. AROS's Wanderer and Directory Opus 5 were read for how, and no
  * code was taken from them or from Hyperion's. */
@@ -121,6 +128,7 @@
 #include "tata_inspect.h"
 #endif
 #include "wb_drawer.h"
+#include "ob_drop.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
 #include "wb_thumb.h"
@@ -129,8 +137,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.25"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (17.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENBENCH_VERSION "0.1.26"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (18.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -1584,6 +1592,51 @@ static void select_only(dicon *keep)
 /* The root window's messages: selecting, opening and dragging the desktop's icons, its menus. 0 to quit. */
 static dicon *pressed_on, *dragging;
 static LONG press_x, press_y, grab_dx, grab_dy;
+static LONG drag_ox, drag_oy;               /* 0.1.26: where the dragged disk icon was when the drag began */
+static struct Window *drag_img;             /* 0.1.26: its picture, while the pointer is over another window */
+
+/* 0.1.26: the disk whose icon is at (sx, sy) on the screen (ob_drop's env) */
+static int volume_at(WORD sx, WORD sy, char *out, int n)
+{
+    dicon *ic = root ? icon_at(sx - root->LeftEdge, sy - root->TopEdge) : NULL;
+    if (!ic) return 0;
+    snprintf(out, (size_t)n, "%s", ic->path);
+    return 1;
+}
+
+static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, volume_at };
+
+static void drag_img_close(void)
+{
+    if (drag_img) {
+        CloseWindow(drag_img);
+        drag_img = NULL;
+    }
+}
+
+/* The dragged disk icon's picture at (sx, sy) on the screen, above the windows, as a drawer's icons are
+ * dragged (opengadtools wb_drawer.c's drag_start): it is opened the first time the pointer leaves the
+ * desktop for another window */
+static void drag_img_at(dicon *ic, LONG sx, LONG sy)
+{
+    if (!drag_img) {
+        if (!ic->dobj || !look.scr) return;
+        drag_img = OpenWindowTags(NULL, WA_Left, sx, WA_Top, sy, WA_Width, ic->w, WA_Height, ic->h,
+                                  WA_Borderless, TRUE, WA_Activate, FALSE, WA_RMBTrap, TRUE, WA_AutoAdjust, TRUE,
+                                  WA_SmartRefresh, TRUE, WA_CustomScreen, (ULONG)look.scr, TAG_DONE);
+        if (!drag_img) return;
+        DrawIconState(drag_img->RPort, ic->dobj, NULL, ic->ix - ic->x, ic->iy - ic->y, IDS_SELECTED,
+                      ICONDRAWA_Frameless, TRUE, ICONDRAWA_Borderless, TRUE, ICONDRAWA_EraseBackground, TRUE,
+                      ICONDRAWA_DrawInfo, (ULONG)dri, TAG_DONE);
+        return;
+    }
+    if (sx > look.scr->Width - drag_img->Width) sx = look.scr->Width - drag_img->Width;
+    if (sy > look.scr->Height - drag_img->Height) sy = look.scr->Height - drag_img->Height;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx != drag_img->LeftEdge || sy != drag_img->TopEdge)
+        MoveWindow(drag_img, (WORD)(sx - drag_img->LeftEdge), (WORD)(sy - drag_img->TopEdge));
+}
 static ULONG last_secs, last_micros;
 static dicon *last_click;
 static int quit_to_wb;
@@ -1623,6 +1676,16 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 select_only(NULL);
         } else if (code == SELECTUP) {
             if (dragging) {
+                /* 0.1.26: let go over another window: into that drawer, or to that program's AppWindow;
+                 * the disk's icon goes back where it was */
+                WORD sx = (WORD)(root->LeftEdge + mx), sy = (WORD)(root->TopEdge + my);
+                struct Window *w;
+                drag_img_close();
+                w = ob_drop_window_at(sx, sy);
+                if (w && w != root) {
+                    if (dragging->x != drag_ox || dragging->y != drag_oy) move_icon(dragging, drag_ox, drag_oy);
+                    ob_drop_volume(dragging->path, sx, sy, qual);
+                }
                 dragging = NULL;
                 draw_icons();
             }
@@ -1632,7 +1695,20 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
     case IDCMP_MOUSEMOVE:
         if (pressed_on && (dragging || mx - press_x > 3 || press_x - mx > 3 || my - press_y > 3 || press_y - my > 3)) {
             LONG nx = mx - grab_dx, ny = my - grab_dy, ox = pressed_on->x, oy = pressed_on->y;
+            struct Window *w;
+            if (!dragging) {
+                drag_ox = ox;
+                drag_oy = oy;
+            }
             dragging = pressed_on;
+            /* 0.1.26: over another window, its picture follows the pointer above the windows; the icon
+             * stays where it was last on the desktop */
+            w = ob_drop_window_under((WORD)(root->LeftEdge + mx), (WORD)(root->TopEdge + my), drag_img);
+            if (w && w != root) {
+                drag_img_at(dragging, root->LeftEdge + nx, root->TopEdge + ny);
+                break;
+            }
+            drag_img_close();
             if (nx < 0) nx = 0;
             if (ny < 0) ny = 0;
             if (nx > root->Width - pressed_on->w) nx = root->Width - pressed_on->w;
@@ -1791,6 +1867,8 @@ static void new_picture(void)
  * The drawers' paths are kept, to open them again. */
 static void desktop_down(void)
 {
+    drag_img_close();                           /* 0.1.26: a disk icon's drag ends with the desktop */
+    dragging = pressed_on = NULL;
     ob_info_quit_all();                         /* the Information windows (they close without saving) */
     while (ndrawers) close_index(ndrawers - 1); /* close_index keeps drawer_paths[] beyond ndrawers */
     drop_picture();
@@ -2250,6 +2328,7 @@ static int run(void)
     look.open_object = ob_open_object;
     look.info_object = ob_info_object;
     look.screen_title = screen_title;
+    look.drop = ob_drop;                           /* 0.1.26: icons dragged out of a drawer */
     wb_prefs_load();
     aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */
     if (!desktop_up()) goto out;
@@ -2260,6 +2339,7 @@ static int run(void)
     wbp_notify = notify_on(&wbp_nr, "ENV:Sys/Workbench.prefs", wbp_sig);
     pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", pat_sig);
     wbc_start();                                   /* OpenLook's close notice */
+    ob_drop_start(&drop_env);                      /* 0.1.26: before the dock and WBStartup add AppWindows */
     start_dock();
     run_wbstartup();
 
@@ -2279,7 +2359,7 @@ static int run(void)
                           (1UL << pub->mp_SigBit) |
                           (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
-                          SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
+                          ob_drop_sigmask() | SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
         struct Message *lm;
         int quit = 0;
@@ -2338,6 +2418,7 @@ static int run(void)
             if (ask("OpenBench", text, "Try Again|Cancel")) resize_to_window();
         }
         launches_reap();
+        if (sigs & ob_drop_sigmask()) ob_drop_handle();   /* 0.1.26: copies done, AppMessages answered */
         while ((lm = GetMsg(pub))) {
             /* something to open, from the dock or another of the Team's programs (obmsg.h) */
             struct ob_msg *om = (struct ob_msg *)lm;
@@ -2411,6 +2492,7 @@ out:
     tata_inspect_end();
 #endif
     stop_dock();
+    ob_drop_stop();                             /* 0.1.26: its copies run our code; AppMessages answered */
     if (timer) {
         AbortIO((struct IORequest *)tr);
         WaitIO((struct IORequest *)tr);
