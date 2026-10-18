@@ -4,6 +4,12 @@
 # copy engine (engine/of_*.c), for drag and drop (0.1.26, ob_drop.c), from an openamigafilemanager checkout:
 # FILES, default ../../openamigafilemanager.
 #   desktop/build.sh [OUT_DIR]   (default build/os3)
+# The compiler: OS32_GCC16 (as OpenFTP's build-os3.sh), else STOVE, else ~/AmigaChrome/stoves/os32-gcc16.
+# Not the os32 stove's GCC 6.5.0b: at -O2 its peephole2 clears a word and the field after it with one clr.l
+# (it broke OpenCompress's LhA reader and zlib's deflate, both built into programs like this one), so this
+# script stops when given a GCC older than 16. GCC 16.2.0b has a trap of its own: at -O2 it can turn a loop
+# that shifts an array up into a forward copy, so everything here is built -fno-tree-loop-distribute-patterns,
+# as OpenFTP and OpenFiles are (the stove leaves it on).
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -11,8 +17,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # mathieee libraries), not libm881, so one build runs on every 68040.
 SPECS="-specs=$(cd "$HERE/.." && pwd)/toolchain/m68k-soft-m68040.specs"
 OGT=${OGT:-$HERE/../../opengadtools}
-STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
+STOVE=${OS32_GCC16:-${STOVE:-$HOME/AmigaChrome/stoves/os32-gcc16}}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
+GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
+[ "${GCCV%%.*}" -ge 16 ] 2>/dev/null || { echo "$CC is GCC $GCCV: OpenBench needs GCC 16 (the os32-gcc16 stove; set OS32_GCC16)"; exit 2; }
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
 # The dock's editor (openamigaprefs Dock/src) is built in: OAP, default ../../openamigaprefs. The dock itself is
@@ -22,7 +30,7 @@ W="$OGT/workbench"
 L="$OGT/lib"
 D="$OAP/Dock/src"
 C="$OAP/Common"
-FLAGS="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common"
+FLAGS="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common"
 TMP=$(mktemp -d)
 # shellcheck disable=SC2086
 "$CC" $FLAGS -I"$D" -I"$C" -c -o "$TMP/od_dock.o" "$D/od_dock.c"

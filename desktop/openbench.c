@@ -1082,7 +1082,8 @@ static int find_tool(const char *project, const char *tool, char *out, int n)
     }
     for (i = 0; places[i]; i++) {
         if (!places[i][0]) {
-            snprintf(try_, sizeof try_, "%s", project);
+            if (snprintf(try_, sizeof try_, "%s", project) >= (int)sizeof try_)
+                continue;                                   /* too long a path to try */
             *(char *)PathPart((STRPTR)try_) = 0;
             AddPart((STRPTR)try_, (CONST_STRPTR)tool, sizeof try_);
         } else
