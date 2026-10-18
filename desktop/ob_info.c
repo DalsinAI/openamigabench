@@ -132,8 +132,9 @@ static int read_info(info *in)
         ok = 1;
         if (in->disk) {
             struct InfoData *id = AllocVec(sizeof *id, MEMF_ANY);
-            snprintf(in->iconpath, sizeof in->iconpath, "%sDisk", in->path);
-            strncpy(in->name, in->path, sizeof in->name - 1);
+            if (snprintf(in->iconpath, sizeof in->iconpath, "%sDisk", in->path) >= (int)sizeof in->iconpath)
+                ok = 0;                                    /* a name too long for its icon's */
+            strlcpy(in->name, in->path, sizeof in->name);
             in->name[strlen(in->name) - 1] = 0;            /* without the colon */
             if (id && Info(l, id)) {
                 unsigned long long bpb = id->id_BytesPerBlock, total = (unsigned long long)id->id_NumBlocks * bpb,
@@ -151,11 +152,11 @@ static int read_info(info *in)
             }
             if (id) FreeVec(id);
         } else {
-            strncpy(in->iconpath, in->path, sizeof in->iconpath - 1);
-            strncpy(in->name, (const char *)FilePart((STRPTR)in->path), sizeof in->name - 1);
+            strlcpy(in->iconpath, in->path, sizeof in->iconpath);
+            strlcpy(in->name, (const char *)FilePart((STRPTR)in->path), sizeof in->name);
             in->drawer = fib->fib_DirEntryType > 0;
             in->prot = fib->fib_Protection;
-            strncpy(in->comment, (const char *)fib->fib_Comment, sizeof in->comment - 1);
+            strlcpy(in->comment, (const char *)fib->fib_Comment, sizeof in->comment);
             if (!in->drawer) {
                 char b[24];
                 thousands(b, sizeof b, (unsigned long long)fib->fib_Size);
@@ -398,7 +399,8 @@ static void run(info *in, int slot)
     int done = 0;
     char title[140];
     layout(in, &iw, &ih, 0);
-    snprintf(title, sizeof title, "Information: %s", in->disk ? in->path : in->name);
+    if (snprintf(title, sizeof title, "Information: %s", in->disk ? in->path : in->name) >= (int)sizeof title)
+        strcpy(title + sizeof title - 4, "...");             /* a long path: its start, then "..." */
     in->w = OpenWindowTags(NULL, WA_PubScreen, (ULONG)in->scr, WA_InnerWidth, iw, WA_InnerHeight, ih, WA_Title, (ULONG)title,
                            WA_Left, (in->scr->Width - iw) / 2, WA_Top, (in->scr->Height - ih) / 3,
                            WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE, WA_Activate, TRUE,
@@ -494,7 +496,7 @@ static void info_entry(void)
     slot = st->slot;
     if ((in = AllocVec(sizeof *in, MEMF_ANY | MEMF_CLEAR))) {
         in->scr = st->scr;
-        strncpy(in->path, st->path, sizeof in->path - 1);
+        strlcpy(in->path, st->path, sizeof in->path);
         if (read_info(in) && (in->vi = GetVisualInfoA(in->scr, NULL)))
             run(in, slot);
         else
