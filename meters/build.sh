@@ -1,5 +1,8 @@
 #!/bin/sh
-# OpenMeters, the desktop widget (meters/openmeters.c), for AmigaOS 3.x with the os32 stove.
+# OpenMeters, the desktop widget (meters/openmeters.c), for AmigaOS 3.x with the os32-gcc16 stove.
+# The compiler: OS32_GCC16, else STOVE, else ~/AmigaChrome/stoves/os32-gcc16 (as desktop/build.sh); it stops
+# when given an older GCC (the os32 stove's GCC 6.5.0b merges a word clear and the long clear after it into one
+# clr.l at -O2), and builds -fno-tree-loop-distribute-patterns (GCC 16.2.0b's loop-shift trap).
 #   meters/build.sh [OUT_DIR]   (default build/os3): OpenMeters and its icon, OpenMeters.info
 # 0.2 draws its panel as the dock draws its shelf, in the theme's colours: it links opengadtools' theme reader
 # (lib/ogt_theme.c; OGT, default ../../opengadtools) and includes openamigaprefs' Common/wbclose.h (OAP, default
@@ -12,11 +15,13 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SPECS="-specs=$(cd "$HERE/.." && pwd)/toolchain/m68k-soft-m68040.specs"
 OGT=${OGT:-$HERE/../../opengadtools}
 OAP=${OAP:-$HERE/../../openamigaprefs}
-STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
+STOVE=${OS32_GCC16:-${STOVE:-$HOME/AmigaChrome/stoves/os32-gcc16}}
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
+GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
+[ "${GCCV%%.*}" -ge 16 ] 2>/dev/null || { echo "$CC is GCC $GCCV: this needs GCC 16 (the os32-gcc16 stove; set OS32_GCC16)"; exit 2; }
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
-"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common \
+"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common \
     -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" -lamiga
 echo "OpenMeters: $(wc -c < "$OUT/OpenMeters") bytes"
 # its icon, OpenMeters.info beside it: a frosted panel of bars, a GlowIcon in the Open family's style, with the
