@@ -213,6 +213,20 @@ Each new call gets its own row after `wb_lib.sfd`'s, an autodoc, and a test. A p
 
 The library is "anchored", in `OPEN_LIBRARIES.md`'s words: its lists and its desktop belong to the 68k's world. Its state is behind one `SignalSemaphore`, never `Forbid()`. So it stays correct when callers run on other cores and their calls are carried to the anchor core.
 
+### 3.7 The Team's WorkbenchControlA tags, before L3 (W67, 18 October 2026)
+
+Drops on AppWindows came before L3 (Dale, 18 October 2026: "dragging icons 'into' windows"). OpenBench 0.1.26 is still a program beside the ROM's library (amigachrome-guest `libraries/openworkbench`), so the two talk through two private `WorkbenchControlA` tags. They are defined in amigachrome-guest `libraries/openworkbench/owb_team.h`, and `desktop/ob_drop.c` carries a copy. The values are in the Team's own range, far from `WBA_Dummy` (`TAG_USER + 0xA000`) and the reserved tags of 2.5:
+
+| Tag | Value | Data | What |
+| --- | --- | --- | --- |
+| `OWBCTRLA_Dummy` | `TAG_USER + 0x4F574200` ("OWB") | | the base of the range |
+| `OWBCTRLA_DesktopDrops` | `OWBCTRLA_Dummy + 1` | BOOL | the desktop delivers drops on AppWindows. While TRUE, `AddAppWindowA` and `AddAppWindowDropZoneA` are taken, as with OS 3.2's Workbench running. AppIcons and AppMenuItems stay refused |
+| `OWBCTRLA_AppWindowAt` | `OWBCTRLA_Dummy + 2` | `struct OWBAppWindowAt *` | in: a window and a place in it; out: the AppWindow's port, its (or its drop zone's) id and userdata, and whether a zone holds the place. With zones, only a place in a zone counts |
+
+At a drop OpenBench asks `OWBCTRLA_AppWindowAt`, and then builds and sends the AppMessage itself, as 2.6 describes, with its own reply port. It measured OS 3.2.3's on lab t5-mouse: one message, type 7, one `WBArg` per icon. A drawer or a disk is its own lock with an empty name; a file is its drawer's lock with its name. The place is relative to the window. The reply comes back to OpenBench, which unlocks the arguments and frees the message. If a program hasn't replied when OpenBench quits, OpenBench waits ten seconds and then leaves the port behind.
+
+**At L3 the library takes them over.** The desktop is then inside the library, `DesktopDrops` is always TRUE, and `AppWindowAt` is answered from inside. The tags stay answered for an older OpenBench. The reply port becomes the library's own (2.6).
+
 ## 4. Starting, running and the rescue
 
 - **`LoadWB` calls `StartWorkbench`, which starts OpenBench** (the desktop's process). A second call while it runs does nothing, as on OS 3.2. The Startup-Sequence may run `LoadWB`, or OpenBench as it does today; both end in the same desktop.
