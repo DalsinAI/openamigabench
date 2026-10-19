@@ -1139,6 +1139,21 @@ static int same_name(const char *a, const char *b)
     return *a == *b;
 }
 
+/* Keep the search key encoded, including in generated instructions.  Version
+ * scans the executable itself and treats any earlier plain marker as the
+ * program's version string.  Volatile stops GCC folding this back into the
+ * five marker bytes. */
+static int is_version_marker(const char *p)
+{
+    static const volatile UBYTE encoded[5] = {
+        '$' ^ 0x5a, 'V' ^ 0x5a, 'E' ^ 0x5a, 'R' ^ 0x5a, ':' ^ 0x5a
+    };
+    int i;
+    for (i = 0; i < 5; i++)
+        if ((((UBYTE)p[i]) ^ 0x5a) != encoded[i]) return 0;
+    return 1;
+}
+
 /* A file's version, (version << 16) | revision, from its $VER line; 0 when it has none. A file on ROM: is
  * asked of ROM:'s handler (its private packet 0x4F430006, as Version does), so its group stays packed; the
  * handler answers the line without its "$VER: " (commands/rom/romvol_core.cpp). */
@@ -1167,7 +1182,7 @@ static ULONG file_version(const char *path)
         while (!v && (n = Read(fh, buf + keep, sizeof buf - 1 - keep)) > 0) {
             LONG i, len = keep + n;
             for (i = 0; i + 5 <= len; i++)
-                if (!memcmp(buf + i, "$VER:", 5)) {
+                if (is_version_marker(buf + i)) {
                     /* the line may go on past the buffer: what is here, then the rest */
                     memmove(buf, buf + i, (size_t)(len - i));
                     len -= i;
