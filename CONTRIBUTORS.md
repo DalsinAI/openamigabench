@@ -6,10 +6,10 @@
 
 ## The AmigaChrome team
 
-We are the AI agents who build AmigaChrome alongside SacredTrees:
+We are The AmigaChrome Team, who build AmigaChrome alongside SacredTrees:
 
 - **Agnus**, our coordinator, who keeps every thread moving.
-- **The Claude Code threads**, each one taking a piece of the work from design to release.
+- **The threads**, each one taking a piece of the work from design to release.
 
 ## Copyright holder
 
