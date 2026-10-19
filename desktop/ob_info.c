@@ -26,6 +26,7 @@
 #include <clib/alib_protos.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #include "ob_info.h"
 
@@ -47,7 +48,7 @@ static struct Window *volatile info_win[MAX_INFO];
 static char info_for[MAX_INFO][PATH_LEN];
 
 enum { G_NAME = 1, G_TYPE, G_SIZE, G_DATE, G_PS, G_PA, G_PR, G_PW, G_PE, G_PD, G_COMMENT, G_TOOL, G_TTLIST, G_TTSTR,
-       G_TTNEW, G_TTDEL, G_SAVE, G_CANCEL, G_COUNT };
+       G_TTNEW, G_TTDEL, G_SAVE, G_CANCEL, G_SIZE2, G_COUNT };
 
 typedef struct {
     struct Screen *scr;
@@ -63,7 +64,8 @@ typedef struct {
     struct Node ttnode[MAX_TT];
     char tt[MAX_TT][TT_LEN];
     int ntt, ttsel, tt_changed;
-    char type[24], size[100], date[64];
+    char type[24], size[112], date[64];
+    char size_a[64], size_b[48];    /* size's two halves, for when it is wider than its field */
     struct Gadget *glist, *g[G_COUNT];
     struct Window *w;
     APTR vi;
@@ -143,8 +145,10 @@ static int read_info(info *in)
                 thousands(t, sizeof t, total >> 20);
                 thousands(u, sizeof u, used >> 20);
                 thousands(f, sizeof f, (total - used) >> 20);
-                snprintf(in->size, sizeof in->size, "%s MB: %s used, %s free (%s)", t, u, f,
+                snprintf(in->size_a, sizeof in->size_a, "%s MB: %s used,", t, u);
+                snprintf(in->size_b, sizeof in->size_b, "%s free (%s)", f,
                          id->id_DiskState == ID_WRITE_PROTECTED ? "read only" : "read/write");
+                snprintf(in->size, sizeof in->size, "%s %s", in->size_a, in->size_b);
                 if (id->id_VolumeNode) {
                     struct DosList *vn = (struct DosList *)BADDR(id->id_VolumeNode);
                     date_text(in->date, sizeof in->date, &vn->dol_misc.dol_volume.dol_VolumeDate);
@@ -160,7 +164,9 @@ static int read_info(info *in)
             if (!in->drawer) {
                 char b[24];
                 thousands(b, sizeof b, (unsigned long long)fib->fib_Size);
-                snprintf(in->size, sizeof in->size, "%s bytes, %ld blocks", b, (long)fib->fib_NumBlocks);
+                snprintf(in->size_a, sizeof in->size_a, "%s bytes,", b);
+                snprintf(in->size_b, sizeof in->size_b, "%ld blocks", (long)fib->fib_NumBlocks);
+                snprintf(in->size, sizeof in->size, "%s %s", in->size_a, in->size_b);
             }
             date_text(in->date, sizeof in->date, &fib->fib_Date);
         }
@@ -208,10 +214,28 @@ static WORD text_len(struct Screen *s, const char *t)
     return w;
 }
 
+/* The tags after flags, to TAG_DONE (at most 7 pairs), are copied with va_arg. gad() used to hand
+ * CreateGadgetA &tag1 as the list, which holds only while gad() is a call of its own with its arguments
+ * on the stack: GCC 16 (OpenBench's compiler since #31) inlines it, and every gadget of the window
+ * got a list of whatever was beside the copy of tag1 (no text, a name of 0xFF bytes, a hung window). */
 static struct Gadget *gad(info *in, struct Gadget *prev, ULONG kind, int id, WORD x, WORD y, WORD w, WORD h,
-                          const char *label, ULONG flags, Tag tag1, ...)
+                          const char *label, ULONG flags, ...)
 {
     struct NewGadget ng;
+    struct TagItem tags[8];
+    va_list ap;
+    int n = 0;
+    va_start(ap, flags);
+    for (;;) {
+        Tag t = va_arg(ap, Tag);
+        if (t == TAG_DONE || n == 7) break;
+        tags[n].ti_Tag = t;
+        tags[n].ti_Data = va_arg(ap, ULONG);
+        n++;
+    }
+    va_end(ap);
+    tags[n].ti_Tag = TAG_DONE;
+    tags[n].ti_Data = 0;
     memset(&ng, 0, sizeof ng);
     ng.ng_LeftEdge = x;
     ng.ng_TopEdge = y;
@@ -222,7 +246,7 @@ static struct Gadget *gad(info *in, struct Gadget *prev, ULONG kind, int id, WOR
     ng.ng_GadgetID = id;
     ng.ng_Flags = flags;
     ng.ng_VisualInfo = in->vi;
-    prev = CreateGadgetA(kind, prev, &ng, (struct TagItem *)&tag1);
+    prev = CreateGadgetA(kind, prev, &ng, tags);
     if (prev) in->g[id] = prev;
     return prev;
 }
@@ -233,21 +257,27 @@ static void layout(info *in, WORD *iw, WORD *ih, int make)
     static const char *const labels[] = { "Name", "Type", "Size", "Changed", "Comment", "Default tool", "Tool types", NULL };
     static const char *const prot[6] = { "Script", "Archived", "Readable", "Writable", "Executable", "Deletable" };
     struct Gadget *p = NULL;
-    WORD fh = in->scr->Font->ta_YSize, rh = fh + 6, m = 8, lw = 0, vw = 340, x0, y, i, ox = 0, oy = 0, W;
+    WORD fh = in->scr->Font->ta_YSize, rh = fh + 6, m = 8, lw = 0, vw = 340, x0, y, i, ox = 0, oy = 0, W, rows;
+    int wrap;
     for (i = 0; labels[i]; i++) { WORD t = text_len(in->scr, labels[i]); if (t > lw) lw = t; }
     lw += 12;
+    /* A size line wider than its field goes on two rows, broken after its comma: a big disk's
+     * ("131,072 MB: 11,292 used," then "119,779 free (read/write)") was cut at the window's edge. */
+    wrap = in->size_b[0] && text_len(in->scr, in->size) > vw - 8;
+    rows = wrap ? 5 : 4;
     if (make) { ox = in->w->BorderLeft; oy = in->w->BorderTop; p = CreateContext(&in->glist); }
     W = m + ICON_BOX + m + lw + vw + m;
     x0 = m + ICON_BOX + m + lw;
     y = m;
-    in->bx = ox + m; in->by = oy + m; in->bw = ICON_BOX; in->bh = 4 * (rh + 4) - 4;
+    in->bx = ox + m; in->by = oy + m; in->bw = ICON_BOX; in->bh = rows * (rh + 4) - 4;
     if (make) {
         p = gad(in, p, STRING_KIND, G_NAME, ox + x0, oy + y, vw, rh, "Name", PLACETEXT_LEFT, GTST_String, (ULONG)in->name, GTST_MaxChars, 100, TAG_DONE);
         p = gad(in, p, TEXT_KIND, G_TYPE, ox + x0, oy + y + (rh + 4), vw, rh, "Type", PLACETEXT_LEFT, GTTX_Text, (ULONG)in->type, GTTX_Border, FALSE, TAG_DONE);
-        p = gad(in, p, TEXT_KIND, G_SIZE, ox + x0, oy + y + 2 * (rh + 4), vw, rh, "Size", PLACETEXT_LEFT, GTTX_Text, (ULONG)in->size, TAG_DONE);
-        p = gad(in, p, TEXT_KIND, G_DATE, ox + x0, oy + y + 3 * (rh + 4), vw, rh, in->disk ? "Created" : "Changed", PLACETEXT_LEFT, GTTX_Text, (ULONG)in->date, TAG_DONE);
+        p = gad(in, p, TEXT_KIND, G_SIZE, ox + x0, oy + y + 2 * (rh + 4), vw, rh, "Size", PLACETEXT_LEFT, GTTX_Text, (ULONG)(wrap ? in->size_a : in->size), TAG_DONE);
+        if (wrap) p = gad(in, p, TEXT_KIND, G_SIZE2, ox + x0, oy + y + 3 * (rh + 4), vw, rh, NULL, 0, GTTX_Text, (ULONG)in->size_b, TAG_DONE);
+        p = gad(in, p, TEXT_KIND, G_DATE, ox + x0, oy + y + (rows - 1) * (rh + 4), vw, rh, in->disk ? "Created" : "Changed", PLACETEXT_LEFT, GTTX_Text, (ULONG)in->date, TAG_DONE);
     }
-    y += 4 * (rh + 4) + 4;
+    y += rows * (rh + 4) + 4;
     if (!in->disk) {
         WORD cw = (W - 2 * m) / 3;
         for (i = 0; i < 6; i++) {
