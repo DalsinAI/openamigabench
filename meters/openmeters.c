@@ -76,8 +76,8 @@
 #include "ogt_theme.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.2"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (12.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENMETERS_VERSION "0.2.3"
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (20.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
@@ -840,14 +840,27 @@ static ULONG *seen_line;           /* the screen beside the panel when what is b
 static int line_x, line_y, line_n, line_across;
 static int copy_dirty;             /* a window was over the place when it was copied: copy again once it has gone */
 
-/* True when a window other than a backdrop one (or ours) is over the box. */
+/* True while a window on the screen has its menus up. */
+static int menus_up(void)
+{
+    int up = 0;
+    ULONG lock = LockIBase(0);
+    for (struct Window *v = scr->FirstWindow; v && !up; v = v->NextWindow) up = (v->Flags & WFLG_MENUSTATE) != 0;
+    UnlockIBase(lock);
+    return up;
+}
+
+/* True when a window other than a backdrop one (or ours) is over the box, or the menus are up: their boxes are
+ * layers of no window, and a copy made through them put the menu in the panel and the panel over the menu (0.2.3,
+ * the Team, 20 October 2026: "the meter going in front of the screen menu items"). */
 static int covered(int x, int y, int w, int h)
 {
     int over = 0;
     ULONG lock = LockIBase(0);
     for (struct Window *v = scr->FirstWindow; v && !over; v = v->NextWindow) {
+        if (v->Flags & WFLG_MENUSTATE) over = 1;
         if (v == win || (v->Flags & WFLG_BACKDROP)) continue;
-        over = !(v->LeftEdge >= x + w || v->LeftEdge + v->Width <= x || v->TopEdge >= y + h || v->TopEdge + v->Height <= y);
+        over |= !(v->LeftEdge >= x + w || v->LeftEdge + v->Width <= x || v->TopEdge >= y + h || v->TopEdge + v->Height <= y);
     }
     UnlockIBase(lock);
     return over;
@@ -1006,7 +1019,7 @@ static int run(void)
 {
     struct MsgPort *tport = NULL;
     struct timerequest *tr = NULL;
-    int timer = 0, quit = 0, ticks = 0, wb_down = 0, stale_wait = 0;
+    int timer = 0, quit = 0, ticks = 0, wb_down = 0, stale_wait = 0, held = 0;
     placed = opt.left >= 0 && opt.top >= 0;
     wbc_start();
     if (!open_panel()) { wbc_stop(); return RETURN_FAIL; }
@@ -1076,6 +1089,8 @@ static int run(void)
             }
         }
         if (quit || wb_down) continue;
+        if (again && menus_up()) { held = 1; again = 0; }  /* opened again once the menus are down, not over them */
+        else if (held && !menus_up()) { held = 0; again = 1; }
         if (again) { ticks = 0; if (!relayout()) wb_down = 2; }   /* not opened: tried again each second */
         else if (redraw) draw();
     }
