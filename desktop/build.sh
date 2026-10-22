@@ -105,16 +105,22 @@ TATA=${TATA:-$HERE/../../openamigatata}
 OB_TATA_DEFS=""
 if [ -f "$TATA/src/tata_inspect.c" ]; then
     TS="$TATA/src"
+    # Tata's sources with Tata's own allowance (its build.sh): GCC 16's truncation warnings stay warnings,
+    # on a compiler that knows them (GCC 6.5 refuses -Wno-error= for one it doesn't)
+    TATAF="$FLAGS"
+    for w in format-truncation stringop-truncation; do
+        if echo 'int x;' | "$CC" -Werror -Wno-error=$w -fsyntax-only -x c - 2>/dev/null; then TATAF="$TATAF -Wno-error=$w"; fi
+    done
     for f in tata_db tata_files tata_inspect tata_ui; do
         # shellcheck disable=SC2086
-        "$CC" $FLAGS -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_$f.o" "$TS/$f.c"
+        "$CC" $TATAF -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_$f.o" "$TS/$f.c"
         BUILTIN_OBJS="$BUILTIN_OBJS $TMP/tata_$f.o"
     done
     # the hashes at -O1, as Tata's own build.sh (GCC 6.5's -O2 has broken loops of their shape)
     # shellcheck disable=SC2086
-    "$CC" $(echo $FLAGS | sed 's/-O2/-O1/') -fno-lto -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_hash.o" "$TS/tata_hash.c"
+    "$CC" $(echo $TATAF | sed 's/-O2/-O1/') -fno-lto -I"$TS" -DIN_OPENBENCH -c -o "$TMP/tata_hash.o" "$TS/tata_hash.c"
     # shellcheck disable=SC2086
-    "$CC" $FLAGS -Wno-pointer-sign -I"$TS" -I"$L" -DIN_OPENBENCH -Dmain=opentata_main -c -o "$TMP/opentata.o" "$TS/prefs/tataprefs.c"
+    "$CC" $TATAF -Wno-pointer-sign -I"$TS" -I"$L" -DIN_OPENBENCH -Dmain=opentata_main -c -o "$TMP/opentata.o" "$TS/prefs/tataprefs.c"
     # its toolbar (the other built-ins draw none: compiled here, once)
     # shellcheck disable=SC2086
     "$CC" $FLAGS -I"$L" -c -o "$TMP/ogt_toolbar.o" "$L/ogt_toolbar.c"
