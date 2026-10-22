@@ -22,7 +22,7 @@ GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
 "$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common \
-    -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" -lamiga
+    -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" "$OGT/lib/ogt_font.c" -lamiga
 echo "OpenMeters: $(wc -c < "$OUT/OpenMeters") bytes"
 # its icon, OpenMeters.info beside it: a frosted panel of bars, a GlowIcon in the Open family's style, with the
 # tooltypes MAKEICON writes (meters/make_icon.py; needs Python with Pillow and an amigachrome checkout,

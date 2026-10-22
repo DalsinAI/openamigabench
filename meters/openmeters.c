@@ -74,10 +74,11 @@
 #include <stdio.h>
 
 #include "ogt_theme.h"
+#include "ogt_font.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.3"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (20.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENMETERS_VERSION "0.2.4"
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (22.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
@@ -115,6 +116,7 @@ static struct Window *win;
 static struct Menu *menus;
 static APTR vi;
 static struct TextFont *font;
+static struct TextAttr font_ta;          /* what ogt_open_font opened */
 static row rows[MAX_ROWS];
 static int nrows;
 static char date_line[64];
@@ -937,8 +939,10 @@ static int open_panel(void)
 {
     WORD w, h, x, y;
     if (!(scr = LockPubScreen((STRPTR)"Workbench"))) return 0;
-    if (!(font = OpenFont(scr->Font))) { close_panel(); return 0; }
     read_look();
+    /* the theme's font, as OpenBench's icon labels (ogt_open_font, Dale 22 Oct 2026: "font size in openbench
+     * needs to match icon font"), not the screen's, which the ROM sizes to a tall screen's bar */
+    if (!(font = ogt_open_font(theme_ok ? &theme : NULL, scr, &font_ta))) { close_panel(); return 0; }
     read_dock();
     look_sig = look_signature();
     choose_tint();
