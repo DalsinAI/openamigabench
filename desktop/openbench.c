@@ -1037,12 +1037,12 @@ static void scan_volumes(void)
     qsort(icons, (size_t)nicons, sizeof icons[0], by_order);
     for (i = 0; i < nicons; i++) {
         dicon *ic = &icons[i];
-        char ip[96];
+        char dpath[96];
         struct Rectangle r;
         snprintf(ic->path, sizeof ic->path, "%s:", ic->name);
-        snprintf(ip, sizeof ip, "%s:Disk", ic->name);
+        snprintf(dpath, sizeof dpath, "%s:Disk", ic->name);
         ic->selected = 0;
-        ic->dobj = GetIconTags((CONST_STRPTR)ip, ICONGETA_FailIfUnavailable, TRUE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        ic->dobj = GetIconTags((CONST_STRPTR)dpath, ICONGETA_FailIfUnavailable, TRUE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
         if (!ic->dobj)                              /* no Disk.info: def_<kind>, or the default disk icon */
             ic->dobj = GetIconTags(NULL, ICONGETA_GetDefaultName, (ULONG)ic->kind, ICONGETA_GetDefaultType, WBDISK,
                                    ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
