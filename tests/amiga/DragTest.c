@@ -11,6 +11,8 @@
  *                                         after a pause (HOLD, 25 ticks); RIGHT: the menu button; LATE: the
  *                                         QUAL keys go down half way, once the drag is under way
  *   DragTest KEY code [QUAL q]            a raw key pressed and let go (hex or decimal)
+ *   DragTest OPEN path                    opened as the desktop opens it: OpenBench's port (OPENBENCH, openamigaprefs
+ *                                         Common/obmsg.h), else workbench.library's OpenWorkbenchObjectA
  *
  * QUAL is a list joined by "+": LSHIFT, RSHIFT, CAPS, CTRL, LALT, RALT, LAMIGA, RAMIGA. Each one's key goes
  * down before the action and up after it, and every event of the action carries it as a qualifier.
@@ -21,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <exec/types.h>
+#include <exec/memory.h>
 #include <dos/dos.h>
 #include <dos/rdargs.h>
 #include <devices/input.h>
@@ -31,6 +34,7 @@
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
+#include <proto/wb.h>
 
 const char version[] = "$VER: DragTest 1.0 (24.10.2026) AmigaChrome Team";
 
@@ -128,6 +132,46 @@ static void keys_up(const UBYTE *keys, int n, UWORD qual)
     }
 }
 
+/* OpenBench's message (openamigaprefs Common/obmsg.h: keep the layout the same) */
+struct ob_msg {
+    struct Message m;
+    ULONG magic;
+    LONG ok;
+    char path[256];
+};
+
+static int open_object(const char *path)
+{
+    struct MsgPort *reply = CreateMsgPort(), *ob;
+    struct ob_msg *m;
+    int ok = -1;
+    if (!reply) return 0;
+    if ((m = AllocVec(sizeof *m, MEMF_PUBLIC | MEMF_CLEAR))) {
+        m->m.mn_ReplyPort = reply;
+        m->m.mn_Length = sizeof *m;
+        m->magic = 0x4F424D31UL;
+        strncpy(m->path, path, sizeof m->path - 1);
+        Forbid();
+        if ((ob = FindPort((CONST_STRPTR)"OPENBENCH"))) PutMsg(ob, &m->m);
+        Permit();
+        if (ob) {
+            WaitPort(reply);
+            GetMsg(reply);
+            ok = m->ok ? 1 : 0;
+        }
+        FreeVec(m);
+    }
+    DeleteMsgPort(reply);
+    if (ok < 0) {
+        struct Library *WorkbenchBase = OpenLibrary((CONST_STRPTR)"workbench.library", 44);
+        if (WorkbenchBase) {
+            ok = OpenWorkbenchObjectA((STRPTR)path, NULL) ? 1 : 0;
+            CloseLibrary(WorkbenchBase);
+        }
+    }
+    return ok > 0;
+}
+
 static void list(void)
 {
     struct Screen *s;
@@ -170,6 +214,13 @@ int main(void)
         list();
         FreeArgs(rd);
         return 0;
+    }
+    if (!stricmp(act, "OPEN")) {
+        xy = (LONG **)a[A_XY];
+        rc = xy && *xy && open_object((const char *)*xy) ? 0 : 10;
+        if (rc) PutStr((CONST_STRPTR)"DragTest: not opened\n");
+        FreeArgs(rd);
+        return rc;
     }
     if (!(port = CreateMsgPort()) || !(io = (struct IOStdReq *)CreateIORequest(port, sizeof *io)) ||
         OpenDevice((CONST_STRPTR)"input.device", 0, (struct IORequest *)io, 0)) {
