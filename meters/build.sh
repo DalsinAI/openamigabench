@@ -7,6 +7,8 @@
 # 0.2 draws its panel as the dock draws its shelf, in the theme's colours: it links opengadtools' theme reader
 # (lib/ogt_theme.c; OGT, default ../../opengadtools) and includes openamigaprefs' Common/wbclose.h (OAP, default
 # ../../openamigaprefs), as desktop/build.sh does.
+# 0.2.5 draws in the icons' font: with no Workbench icon font in Font prefs, the theme's, through opengadtools'
+# lib/ogt_font.c, as OpenBench's icon labels.
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,7 +24,7 @@ GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
 "$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common \
-    -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" -lamiga
+    -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" "$OGT/lib/ogt_font.c" -lamiga
 echo "OpenMeters: $(wc -c < "$OUT/OpenMeters") bytes"
 # its icon, OpenMeters.info beside it: a frosted panel of bars, a GlowIcon in the Open family's style, with the
 # tooltypes MAKEICON writes (meters/make_icon.py; needs Python with Pillow and an amigachrome checkout,

@@ -22,7 +22,8 @@
  * are its arguments:
  *   CORNER=TOPRIGHT       TOPLEFT, TOPRIGHT, BOTTOMLEFT or BOTTOMRIGHT of the screen (default TOPRIGHT)
  *   LEFT=n TOP=n          a place of its own instead (the place it was dragged to is kept: ENVARC:OpenMeters.place)
- *   BARWIDTH=n            the bars' width in pixels (default 200)
+ *   BARWIDTH=n            the bars' width in pixels (default 200 at a 13-pixel font, in proportion to the font;
+ *                         never narrower than the numbers in them)
  *   REFRESH=n             seconds between readings (default 2)
  *   NODATE NOMEMORY NOVIDEO NOVOLUMES   leave those out
  *   RAM                   show RAM: too
@@ -35,6 +36,14 @@
  *                         17 October 2026)
  * Drag it anywhere by any part of it. Its menu (right button while it is the active window): Refresh, Quit.
  * Ctrl-C quits too.
+ *
+ * 0.2.5 (the user's solid OS list, 24 October 2026: OpenMeters' text much larger than the icon labels): the text
+ * is in the icons' font, Font prefs' Workbench icon text font at its size, or with none set the theme's, which
+ * OpenBench draws its icon labels in (ogt_open_font), not the screen's, which the open ROM sizes to a tall
+ * screen's bar. The rows and bars are sized from it (the bars' default width is 200 at a 13-pixel font) and a bar
+ * is never narrower than the number in it, which was cut off ("1,371 MBy"). Each pixel of a number is in
+ * whichever of its two colours stands out more from what is under it: white over the bar's light grey track,
+ * where a fill ended under a number, was hard to read. A change of Font prefs is followed as one of the look.
  *
  * Video RAM: openrtg.library does not yet say how much of the card's memory is in use, so that bar shows the
  * card's video RAM (the AutoConfig board's size, AmigaChrome Team $DA15 product 9 or 15) with no fill.
@@ -61,6 +70,7 @@
 #include <libraries/expansionbase.h>
 #include <libraries/gadtools.h>
 #include <cybergraphx/cybergraphics.h>
+#include <prefs/font.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/intuition.h>
@@ -70,18 +80,20 @@
 #include <proto/expansion.h>
 #include <proto/gadtools.h>
 #include <proto/cybergraphics.h>
+#include <proto/diskfont.h>
 #include <string.h>
 #include <stdio.h>
 
 #include "ogt_theme.h"
+#include "ogt_font.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.4"
+#define OPENMETERS_VERSION "0.2.5"
 static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
-struct Library *UtilityBase, *IconBase, *GadToolsBase, *CyberGfxBase;
+struct Library *UtilityBase, *IconBase, *GadToolsBase, *CyberGfxBase, *DiskfontBase;
 struct ExpansionBase *ExpansionBase;
 
 #define MAX_ROWS 24
@@ -91,6 +103,7 @@ struct ExpansionBase *ExpansionBase;
 #define PLACE_ENV "ENV:OpenMeters.place"
 #define PLACE_ENVARC "ENVARC:OpenMeters.place"
 #define LOOK_ENV "ENV:OpenGadTools/Look"
+#define FONT_ENV "ENV:Sys/font.prefs"
 #define DOCK_ENV "ENV:OpenDock/Dock"
 #define THEME_DIR "SYS:Prefs/Presets/Themes/"
 
@@ -108,13 +121,17 @@ static struct {
     int corner;                    /* 0 TL, 1 TR, 2 BL, 3 BR */
     int nodate, nomemory, novideo, novolumes, ram;
     char hide[200];
-} opt = { -1, -1, 200, 2, 1, 0, 0, 0, 0, 0, "" };
+    int barwidth_set;              /* BARWIDTH given: that width, else 200 in proportion to the font */
+} opt = { -1, -1, 200, 2, 1, 0, 0, 0, 0, 0, "", 0 };
 
 static struct Screen *scr;
 static struct Window *win;
 static struct Menu *menus;
 static APTR vi;
 static struct TextFont *font;
+static struct TextAttr font_ta;    /* the font asked for */
+static char font_name[FONTNAMESIZE];
+static WORD bar_w, bar_min;        /* the bars' width; at least that while the panel is open (no jitter) */
 static row rows[MAX_ROWS];
 static int nrows;
 static char date_line[64];
@@ -144,7 +161,8 @@ static void tooltypes(struct WBStartup *wbs)
     if (!dob) return;
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"LEFT"))) StrToLong((STRPTR)v, &opt.left);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"TOP"))) StrToLong((STRPTR)v, &opt.top);
-    if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"BARWIDTH"))) StrToLong((STRPTR)v, &opt.barwidth);
+    if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"BARWIDTH")) && StrToLong((STRPTR)v, &opt.barwidth) > 0)
+        opt.barwidth_set = 1;
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"REFRESH"))) StrToLong((STRPTR)v, &opt.refresh);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"CORNER"))) opt.corner = corner_of(v);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"HIDE"))) strncpy(opt.hide, v, sizeof opt.hide - 1);
@@ -386,23 +404,35 @@ static colour mix(colour a, colour b, int t)       /* t of 256 parts b */
 
 static colour rgb(ULONG v) { colour c; c.r = (v >> 16) & 255; c.g = (v >> 8) & 255; c.b = v & 255; return c; }
 
-static char *read_file(const char *path)
+/* A file, with a 0 after it; its length in *n when n is given. */
+static char *read_file_n(const char *path, LONG *n)
 {
     BPTR fh = Open((STRPTR)path, MODE_OLDFILE);
     char *buf = NULL;
     LONG len;
+    if (n) *n = 0;
     if (!fh) return NULL;
     Seek(fh, 0, OFFSET_END);
     len = Seek(fh, 0, OFFSET_BEGINNING);
     if (len >= 0 && len < 64 * 1024 && (buf = AllocVec(len + 1, MEMF_ANY | MEMF_CLEAR)) && Read(fh, buf, len) != len) { FreeVec(buf); buf = NULL; }
     Close(fh);
+    if (buf && n) *n = len;
     return buf;
 }
+
+static char *read_file(const char *path) { return read_file_n(path, NULL); }
 
 static ULONG hash(ULONG h, const char *t)
 {
     if (!t) return h * 33;
     while (*t) h = h * 33 + (UBYTE)*t++;
+    return h;
+}
+
+static ULONG hash_n(ULONG h, const char *t, LONG n)
+{
+    if (!t) return h * 33;
+    while (n-- > 0) h = h * 33 + (UBYTE)*t++;
     return h;
 }
 
@@ -423,8 +453,10 @@ static int mode_of(const char *word)
  * hour) and the screen's background. It changes when any of them does. */
 static ULONG look_signature(void)
 {
-    char *l = read_file(LOOK_ENV), *d = read_file(DOCK_ENV), name[64], mode[8];
-    ULONG h = hash(hash(5381, l), d);
+    LONG fn;
+    char *l = read_file(LOOK_ENV), *d = read_file(DOCK_ENV), *f = read_file_n(FONT_ENV, &fn), name[64], mode[8];
+    ULONG h = hash_n(hash(hash(5381, l), d), f, fn);    /* 0.2.5: Font prefs too, for the icons' font */
+    if (f) FreeVec(f);
     if (l && sscanf(l, "%63s %7s", name, mode) == 2) h = h * 33 + (ULONG)mode_of(mode);
     if (l) FreeVec(l);
     if (d) FreeVec(d);
@@ -492,6 +524,43 @@ static colour theme_colour(const char *key, ULONG light, ULONG dark)
         return r;
     }
     return rgb(look_mode == 1 ? dark : light);
+}
+
+/* 0.2.5: the icons' font (the user's solid OS list, 24 October 2026). Font prefs' Workbench icon text font at its
+ * size, from ENV:Sys/font.prefs (a FONT chunk of type FP_WBFONT; the file is the OS's, IFF PREF); with none set,
+ * the font OpenBench draws its icon labels in: the theme's, through opengadtools' ogt_open_font, as
+ * desktop/openbench.c opens it (Team 3's measurement, 22 October 2026: the screen's font, which the open ROM
+ * sizes to a tall screen's bar, was CGTriumvirate 21 on Instance-32, its capitals 13 pixels against the labels'
+ * 9). The screen's font only when neither opens. Called with the look read. */
+static struct TextFont *icon_font(void)
+{
+    LONG n, i;
+    UBYTE *t = (UBYTE *)read_file_n(FONT_ENV, &n);
+    struct TextFont *f = NULL;
+    if (t && n >= 12 && !memcmp(t, "FORM", 4) && !memcmp(t + 8, "PREF", 4)) {
+        for (i = 12; i + 8 <= n;) {
+            ULONG sz = (ULONG)t[i + 4] << 24 | (ULONG)t[i + 5] << 16 | (ULONG)t[i + 6] << 8 | t[i + 7];
+            if (sz > (ULONG)(n - i - 8)) break;
+            if (!memcmp(t + i, "FONT", 4) && sz >= sizeof(struct FontPrefs)) {
+                const struct FontPrefs *fp = (const struct FontPrefs *)(t + i + 8);     /* i is even: aligned */
+                if (fp->fp_Type == FP_WBFONT && fp->fp_Name[0] && fp->fp_TextAttr.ta_YSize > 0) {
+                    strncpy(font_name, (const char *)fp->fp_Name, sizeof font_name - 1);
+                    font_name[sizeof font_name - 1] = 0;
+                    font_ta.ta_Name = (STRPTR)font_name;
+                    font_ta.ta_YSize = fp->fp_TextAttr.ta_YSize;
+                    font_ta.ta_Style = fp->fp_TextAttr.ta_Style;
+                    font_ta.ta_Flags = fp->fp_TextAttr.ta_Flags;
+                    f = DiskfontBase ? OpenDiskFont(&font_ta) : OpenFont(&font_ta);
+                    break;
+                }
+            }
+            i += 8 + sz + (sz & 1);
+        }
+    }
+    if (t) FreeVec(t);
+    if (!f) f = ogt_open_font(theme_ok ? &theme : NULL, scr, &font_ta);
+    if (!f) f = OpenFont(scr->Font);
+    return f;
 }
 
 static colour pen_colour(int pen)
@@ -709,6 +778,33 @@ static void text_px(int x, int y, const char *s, colour c, int split, colour c2)
     }
 }
 
+/* 0.2.5: a number in its bar, each pixel in whichever of a and b stands out more from what is under it, so a
+ * number is read over the fill, the track, and where the fill ends under it. */
+static void text_px_contrast(int x, int y, const char *s, colour a, colour b)
+{
+    int n = strlen(s), fh = font->tf_YSize, bpr = tbm.BytesPerRow, tw;
+    if (!tplane || !n) return;
+    WaitBlit();
+    memset(tplane, 0, bpr * fh);
+    Move(&trp, 0, font->tf_Baseline);
+    Text(&trp, (STRPTR)s, n);
+    WaitBlit();
+    tw = TextLength(&trp, (STRPTR)s, n) + 8;
+    if (tw > tbm_w) tw = tbm_w;
+    for (int r = 0; r < fh; r++) {
+        const UBYTE *bits = tplane + r * bpr;
+        int Y = y + r;
+        if (Y < 0 || Y >= H) continue;
+        for (int i = 0; i < tw; i++) {
+            int X = x + i;
+            colour under;
+            if (!(bits[i >> 3] & (0x80 >> (i & 7))) || X < 0 || X >= W) continue;
+            under = rgb(work_px[Y * W + X]);
+            work_px[Y * W + X] = argb(apart(a, under) >= apart(b, under) ? a : b);
+        }
+    }
+}
+
 /* ---- drawing on a palette screen: the nearest pens, solid, as the dock's are ------------------ */
 
 enum { P_TINT, P_RIM, P_TRACK, P_FILL, P_FULL, P_TEXT, P_DIM, P_FILLTEXT, P_COUNT };
@@ -752,12 +848,24 @@ static WORD text_w(const char *s)
 
 static void measure(WORD *w, WORD *h)
 {
-    int i;
-    WORD dw = opt.nodate ? 0 : text_w(date_line);
+    int i, br;
+    WORD dw = opt.nodate ? 0 : text_w(date_line), vw = 0;
     row_h = font->tf_YSize + 6;
+    br = (row_h - 4) / 2 > 6 ? 6 : (row_h - 4) / 2;
     label_w = 0;
-    for (i = 0; i < nrows; i++) { WORD t = text_w(rows[i].label); if (t > label_w) label_w = t; }
-    *w = PAD + label_w + GAP + opt.barwidth + PAD;
+    for (i = 0; i < nrows; i++) {
+        WORD t = text_w(rows[i].label), v = text_w(rows[i].value);
+        if (t > label_w) label_w = t;
+        if (v > vw) vw = v;
+    }
+    /* 0.2.5: the bars in proportion to the font (200 at 13 pixels), unless BARWIDTH says; never narrower than the
+     * widest number and its margins (it was cut off), nor than they were while the panel is open */
+    bar_w = (WORD)(opt.barwidth_set ? opt.barwidth : (opt.barwidth * font->tf_YSize + 6) / 13);
+    if (bar_w < vw + 12 + br) bar_w = vw + 12 + br;
+    if (bar_w < bar_min) bar_w = bar_min;
+    if (bar_w > 800) bar_w = 800;
+    bar_min = bar_w;
+    *w = PAD + label_w + GAP + bar_w + PAD;
     if (dw + 2 * PAD > *w) *w = dw + 2 * PAD;
     *h = PAD + (opt.nodate ? 0 : row_h + 2) + nrows * row_h + PAD - 2;
 }
@@ -798,21 +906,21 @@ static void compose(void)
     }
     for (i = 0; i < nrows; i++, y += row_h) {
         row *r = &rows[i];
-        WORD by = y + 1, fw = 0, vx = bx + opt.barwidth - 6 - text_w(r->value);
+        WORD by = y + 1, fw = 0, vx = bx + bar_w - 6 - text_w(r->value);
         int full = r->fill != (ULONG)-1 && r->fill >= 900;
         if (r->fill != (ULONG)-1 && r->fill > 0) {
-            fw = (WORD)(opt.barwidth * r->fill / 1000);
+            fw = (WORD)(bar_w * r->fill / 1000);
             if (fw < 2 * br) fw = 2 * br;
         }
         if (card) {
             text_px(bx - GAP - text_w(r->label), y + 2, r->label, c_text, 0, c_text);
-            round_box(work_px, bx, by, opt.barwidth, bh, br, c_track, 255);
+            round_box(work_px, bx, by, bar_w, bh, br, c_track, 255);
             if (fw) round_box(work_px, bx, by, fw, bh, br, full ? c_full : c_fill, 255);
-            text_px(vx, y + 2, r->value, c_text, bx + fw - (fw ? 1 : 0), full ? c_full_text : c_fill_text);
+            text_px_contrast(vx, y + 2, r->value, c_text, full ? c_full_text : c_fill_text);
         } else {
             text_at(rp, bx - GAP - text_w(r->label), y + 2, r->label, pen(P_TEXT));
             SetAPen(rp, pen(P_TRACK));
-            RectFill(rp, bx, by, bx + opt.barwidth - 1, by + bh - 1);
+            RectFill(rp, bx, by, bx + bar_w - 1, by + bh - 1);
             if (fw) { SetAPen(rp, pen(full ? P_FULL : P_FILL)); RectFill(rp, bx, by, bx + fw - 1, by + bh - 1); }
             text_at(rp, vx, y + 2, r->value, pen(P_TEXT));
         }
@@ -937,8 +1045,9 @@ static int open_panel(void)
 {
     WORD w, h, x, y;
     if (!(scr = LockPubScreen((STRPTR)"Workbench"))) return 0;
-    if (!(font = OpenFont(scr->Font))) { close_panel(); return 0; }
     read_look();
+    if (!(font = icon_font())) { close_panel(); return 0; }
+    bar_min = 0;
     read_dock();
     look_sig = look_signature();
     choose_tint();
@@ -1115,6 +1224,7 @@ int main(int argc, char **argv)
     GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39);
     IconBase = OpenLibrary((STRPTR)"icon.library", 39);
     CyberGfxBase = OpenLibrary((STRPTR)"cybergraphics.library", 41);   /* the panel mixed with the desktop on a card */
+    DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);         /* Font prefs' icon font, from disk */
     if (!IntuitionBase || !GfxBase || !UtilityBase || !GadToolsBase) goto done;
     place_read();
     if (wbs) tooltypes(wbs);
@@ -1129,7 +1239,7 @@ int main(int argc, char **argv)
         if (a[0]) opt.corner = corner_of((const char *)a[0]);
         if (a[1]) opt.left = *(LONG *)a[1];
         if (a[2]) opt.top = *(LONG *)a[2];
-        if (a[3]) opt.barwidth = *(LONG *)a[3];
+        if (a[3]) { opt.barwidth = *(LONG *)a[3]; opt.barwidth_set = 1; }
         if (a[4]) opt.refresh = *(LONG *)a[4];
         opt.nodate = a[5] != 0;
         opt.nomemory = a[6] != 0;
@@ -1145,6 +1255,7 @@ int main(int argc, char **argv)
 done:
     if (rda) FreeArgs(rda);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
+    if (DiskfontBase) CloseLibrary(DiskfontBase);
     if (IconBase) CloseLibrary(IconBase);
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (UtilityBase) CloseLibrary(UtilityBase);
