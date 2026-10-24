@@ -11,6 +11,8 @@
  *                                         after a pause (HOLD, 25 ticks); RIGHT: the menu button; LATE: the
  *                                         QUAL keys go down half way, once the drag is under way
  *   DragTest KEY code [QUAL q]            a raw key pressed and let go (hex or decimal)
+ *   DragTest DISKIN                       "a disk was inserted", as a drive's file system says it (for a disk
+ *                                         mounted or formatted where no drive says so, RAD: say)
  *   DragTest OPEN path                    opened as the desktop opens it: OpenBench's port (OPENBENCH, openamigaprefs
  *                                         Common/obmsg.h), else workbench.library's OpenWorkbenchObjectA
  *
@@ -274,9 +276,11 @@ int main(void)
         inject(IECLASS_RAWKEY, 0, (UWORD)(v[0] | IECODE_UP_PREFIX), qual, NULL);
         Delay(2);
         keys_up(keys, nk, qual);
+    } else if (!stricmp(act, "DISKIN")) {
+        inject(IECLASS_DISKINSERTED, 0, 0, 0, NULL);
     } else {
         PutStr((CONST_STRPTR)"DragTest LIST | MOVE x y | CLICK x y [DOUBLE] | DRAG x y x2 y2 [STEPS n] [HOLD t] [RIGHT] | "
-                             "KEY code; QUAL a+b\n");
+                             "KEY code | DISKIN; QUAL a+b\n");
         rc = 10;
     }
     CloseDevice((struct IORequest *)io);
