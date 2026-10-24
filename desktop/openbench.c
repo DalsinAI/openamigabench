@@ -1085,6 +1085,15 @@ static leftout louts[MAX_LEFTOUT];
 static int nlouts;
 static int reread_pending;                  /* the drawers read again once this round of messages is done */
 
+/* path as its disk names it ("System:DnD-A/two.txt" for "SYS:DnD-A/two.txt"), in out; 0 when it isn't there */
+static int full_name(const char *path, char *out, int n)
+{
+    BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
+    int ok = l && NameFromLock(l, (STRPTR)out, n);
+    if (l) UnLock(l);
+    return ok;
+}
+
 static int lout_find(const char *path)
 {
     int i;
@@ -1241,13 +1250,24 @@ static void leftouts_add(void)
     }
 }
 
-/* wb_look's hidden: an icon left out on the desktop isn't shown in its drawer's window */
+/* wb_look's hidden: an icon left out on the desktop isn't shown in its drawer's window. The drawer's path as its
+ * disk names it is kept for the next entry (a drawer opened as "SYS:Tools" is "System:Tools") */
+static char hid_dir[256], hid_full[256];
+
 static int leftout_hidden(const char *dir, const char *name)
 {
     char p[256];
-    size_t n = strlen(dir);
+    size_t n;
     if (!nlouts) return 0;
-    snprintf(p, sizeof p, n && dir[n - 1] != ':' ? "%s/%s" : "%s%s", dir, name);
+    if (strcmp(dir, hid_dir)) {
+        snprintf(hid_dir, sizeof hid_dir, "%s", dir);
+        if (!full_name(dir, hid_full, sizeof hid_full)) snprintf(hid_full, sizeof hid_full, "%s", dir);
+    }
+    n = strlen(hid_full);
+    if (n + strlen(name) + 2 > sizeof p) return 0;
+    strcpy(p, hid_full);
+    if (n && p[n - 1] != ':') strcat(p, "/");
+    strcat(p, name);
     return lout_find(p) >= 0;
 }
 
@@ -1979,13 +1999,17 @@ static void drop_on_desktop(dicon *ic);
  * let go, side by side, and gone from their drawers (read again once this round of messages is done) */
 static int leave_out(const char *const *paths, int n, WORD sx, WORD sy)
 {
+    static char added_path[MAX_LEFTOUT][256];       /* the ones left out now, to put where they were let go */
     int i, k, added = 0;
     for (i = 0; i < n; i++) {
-        const char *c = strchr(paths[i], ':');
-        if (!c || !c[1] || lout_find(paths[i]) >= 0 || nlouts == MAX_LEFTOUT) continue;     /* a disk; or out */
-        snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", paths[i]);
+        char full[256];
+        const char *c;
+        /* kept as the disk names it, as .backdrop names them, whatever assign the drawer was opened through */
+        if (!full_name(paths[i], full, sizeof full) || !(c = strchr(full, ':')) || !c[1]) continue;     /* a disk */
+        if (lout_find(full) >= 0 || nlouts == MAX_LEFTOUT) continue;
+        snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", full);
         louts[nlouts++].permanent = 0;
-        added++;
+        memcpy(added_path[added++], full, sizeof full);
     }
     if (!added || !root) return added > 0;
     scan_volumes();
@@ -1994,7 +2018,7 @@ static int leave_out(const char *const *paths, int n, WORD sx, WORD sy)
         LONG nx, ny;
         int j, mine = 0;
         if (ic->lo < 0) continue;
-        for (j = 0; j < n && !mine; j++) mine = !ci_cmp(ic->path, paths[j]);
+        for (j = 0; j < added && !mine; j++) mine = !ci_cmp(ic->path, added_path[j]);
         if (!mine) continue;
         nx = sx - root->LeftEdge - ic->w / 2 + k++ * (ic->w + 16);
         ny = sy - root->TopEdge - ic->h / 2;
