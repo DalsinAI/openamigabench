@@ -1133,6 +1133,11 @@ static int run(void)
     struct MsgPort *tport = NULL;
     struct timerequest *tr = NULL;
     int timer = 0, quit = 0, ticks = 0, wb_down = 0, stale_wait = 0, held = 0;
+    /* 0.2.5: started with the Workbench (SYS:WBStartup), the panel copies the desktop while OpenBench is still
+     * drawing it (its picture is decoded in a process of its own), and what showed in its corners stayed (lab
+     * t4-desk: the gradient's blue in the corners of a panel over the picture's grey). Copied again 3 and 6
+     * seconds after it starts. */
+    int settle = 6;
     placed = opt.left >= 0 && opt.top >= 0;
     wbc_start();
     if (!open_panel()) { wbc_stop(); return RETURN_FAIL; }
@@ -1164,6 +1169,7 @@ static int run(void)
             if (win && !wb_down) {
                 ticks++;
                 if (stale_wait > 0) stale_wait--;
+                if (settle > 0 && (--settle == 3 || settle == 0)) copy_dirty = 1;
                 /* the look, its mode, the theme or the dock's settings changed: drawn again in the new look */
                 if (look_signature() != look_sig) again = 1;
                 /* what is behind it changed: a window over its place has gone, or the desktop was drawn again */
