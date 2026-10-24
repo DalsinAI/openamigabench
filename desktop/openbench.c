@@ -94,8 +94,21 @@
  *     grid, and the others go round it; Disk.info places are no longer used; ENV:Sys/IconLayout and IconLabels
  *     (OpenPrefs' Icons page; labels close by default) followed at once, the drawers too (opengadtools wb_grid.c);
  *     the desktop's labels light on a dark backdrop and dark on a light one, as the picture's .tone says;
+ *   - drag and drop as OS 3.2.3's Workbench does it (0.1.35; the user, 24 October 2026: icons dragged between
+ *     windows), measured on lab t4-dnd (ob_drop.c has the table): no qualifier key changes a drop; a copy onto a
+ *     name already there asks 3.2.3's question (Replace, Replace all, Skip, Skip all, Cancel), a move within a
+ *     volume isn't asked about; onto a trashcan, what is on its volume goes into it; onto the desktop's space,
+ *     icons are left out for the run (gone from their drawers, Icons > Put Away puts them back), and icons
+ *     each disk's .backdrop leaves out (3.2.3's Leave Out) show there too; icons left out can be dragged into
+ *     drawers, onto disks and onto the trash, and several selected icons go together; the dragged picture is
+ *     the icon itself with its alpha, what is under it showing round it (opengadtools wb_ghost.c); a full or
+ *     write-protected disk is DOS's to ask about, with Retry, as on 3.2.3;
+ *     Alt held at the press takes an icon out of the selection, and no drag starts (3.2.3's); a disk that comes or
+ *     goes, or an icon let go of, never lands on an icon the user put somewhere (the deploy lab, 24 October 2026: a
+ *     new DH2 at the top put RAM Disk over System; the columns are now measured at their final widths, opengadtools
+ *     wb_grid.c, and a drop takes the next free cell);
  *
- * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
+ * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop) and Snapshot; the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. AROS's Wanderer and Directory Opus 5 were read for how, and no
@@ -156,12 +169,13 @@
 #include "wb_fmt.h"
 #include "wb_thumb.h"
 #include "wb_pic.h"
+#include "wb_ghost.h"
 #include "wb_grid.h"
 #include "ogt_theme.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.34"
+#define OPENBENCH_VERSION "0.1.35"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -199,6 +213,8 @@ unsigned long __stack = STACK_NEED;
 #define PORT_NAME "OPENBENCH"
 #define MAX_WINDOWS 24
 #define MAX_VOLUMES 24
+#define MAX_LEFTOUT 64                      /* 0.1.35: icons left out on the desktop */
+#define MAX_DESK (MAX_VOLUMES + MAX_LEFTOUT)
 #define THEME_DIR "SYS:Prefs/Presets/Themes/"
 
 static const char fallback_theme[] =
@@ -695,8 +711,8 @@ static void picture_entry(void)
 /* ---- the desktop's icons --------------------------------------------------------------------- */
 
 typedef struct dicon {
-    char name[64];                          /* the volume's name, the label */
-    char path[72];                          /* "Work:" */
+    char name[64];                          /* the volume's name, the label (0.1.35: a left-out icon's file's) */
+    char path[256];                         /* "Work:" (0.1.35: a left-out icon's file, "Work:Tools/OpenMeters") */
     const char *kind;                       /* its drive's default icon, def_<kind>, when it has no Disk.info */
     struct DiskObject *dobj;
     LONG x, y, w, h;                        /* the picture's box in the root window */
@@ -705,9 +721,10 @@ typedef struct dicon {
     ULONG kb;                               /* 0.1.34: its size, for Clean Up by size */
     struct DateStamp date;                  /* 0.1.34: the volume's date, for Clean Up by date */
     int selected;
+    int lo;                                 /* 0.1.35: a left-out icon's louts[] entry; -1: a disk */
 } dicon;
 
-static dicon icons[MAX_VOLUMES];
+static dicon icons[MAX_DESK];
 static int nicons;
 static struct DrawInfo *dri;
 static LONG label_h;
@@ -731,16 +748,16 @@ static LONG label_h;
 static wb_iconprefs ip;                     /* the icons' settings: ENV:Sys/IconLabels, ENV:Sys/IconLayout */
 static wb_gspec gspec;
 static wb_glayout glay;
-static wb_gcell gcells[MAX_VOLUMES];        /* icons[i]'s cell */
+static wb_gcell gcells[MAX_DESK];           /* icons[i]'s cell */
 static LONG label_max = 112;                /* a label's widest; a longer one ends in "..." */
 
 /* Where the user put an icon in this run, by its volume's name: its cell's corner from the grid's. Kept while its
  * disk is out, so it comes back there. */
 typedef struct dplace {
-    char name[64];
+    char name[256];                         /* a disk's name; 0.1.35: a left-out icon's path */
     WORD x, y;
 } dplace;
-#define MAX_PLACES (2 * MAX_VOLUMES)
+#define MAX_PLACES (2 * MAX_DESK)
 static dplace places[MAX_PLACES];
 static int nplaces;
 
@@ -881,6 +898,12 @@ static void move_icon(dicon *ic, LONG nx, LONG ny)
 
 static void redraw_all(void);
 
+/* 0.1.35: an icon's key among the places: a disk's name, or a left-out icon's path (no disk's name has a colon) */
+static const char *place_key(const dicon *ic)
+{
+    return ic->lo >= 0 ? ic->path : ic->name;
+}
+
 static dplace *place_of(const char *name)
 {
     int i;
@@ -936,7 +959,7 @@ static void place_icons(int clean)
     gspec.gap_y = label_h / 2 > 8 ? label_h / 2 : 8;
     for (i = 0; i < nicons; i++) {
         wb_gcell *c = &gcells[i];
-        dplace *p = place_of(icons[i].name);
+        dplace *p = place_of(place_key(&icons[i]));
         memset(c, 0, sizeof *c);
         c->pw = icons[i].w;
         c->ph = icons[i].h;
@@ -964,7 +987,10 @@ static void drop_on_desktop(dicon *ic)
     if (ip.snap) wb_grid_snap(&gspec, &glay, &c, &x, &y);
     if (x < 0) x = 0;
     if (y < 0) y = 0;
-    p = place_for(ic->name);
+    /* 0.1.35: on the grid, never onto another icon the user put there: the next free cell down (an icon not put
+     * anywhere goes round it, as every icon does round the user's) */
+    if (ip.snap) wb_grid_free(&gspec, &glay, gcells, nicons, i, (int)(root->Height - 2 * GRID_Y), &x, &y);
+    p = place_for(place_key(ic));
     p->x = (WORD)x;
     p->y = (WORD)y;
     place_icons(0);
@@ -1051,6 +1077,207 @@ static int volume_hidden(struct DosList *start, const struct DosList *vol)
     return 0;
 }
 
+/* ---- icons left out on the desktop (0.1.35) -------------------------------------------------------------
+ * As OS 3.2.3 has them (measured, lab t4-dnd, 24 October 2026): an icon let go of on the desktop's space is left out
+ * there for this run, gone from its drawer's window and back in it after a reboot; Icons > Leave Out (3.2.3's, or
+ * OpenFiles') writes a line ":drawer/name" into the disk's .backdrop, and those are left out at every start; Icons
+ * > Put Away puts either kind back, taking its line out of .backdrop (and the file away when no line is left, as
+ * 3.2.3 does). A left-out icon opens what it stands for, and dragged into a drawer, onto a disk or onto the trash
+ * its file goes there, as from a drawer. */
+typedef struct leftout {
+    char path[256];                         /* "Work:Tools/OpenMeters" */
+    UBYTE permanent;                        /* named in its disk's .backdrop */
+} leftout;
+static leftout louts[MAX_LEFTOUT];
+static int nlouts;
+static int reread_pending;                  /* the drawers read again once this round of messages is done */
+
+/* path as its disk names it ("System:DnD-A/two.txt" for "SYS:DnD-A/two.txt"), in out; 0 when it isn't there */
+static int full_name(const char *path, char *out, int n)
+{
+    BPTR l = Lock((CONST_STRPTR)path, ACCESS_READ);
+    int ok = l && NameFromLock(l, (STRPTR)out, n);
+    if (l) UnLock(l);
+    return ok;
+}
+
+static int lout_find(const char *path)
+{
+    int i;
+    for (i = 0; i < nlouts; i++)
+        if (!ci_cmp(louts[i].path, path)) return i;
+    return -1;
+}
+
+static void lout_drop(int i)
+{
+    memmove(&louts[i], &louts[i + 1], (size_t)(nlouts - i - 1) * sizeof louts[0]);
+    nlouts--;
+}
+
+/* A disk's .backdrop, whole, as AllocVec'd text (NUL-terminated), or NULL */
+static char *backdrop_text(const char *vol, LONG *len)
+{
+    char p[96];
+    BPTR fh;
+    char *buf = NULL;
+    LONG n = 0;
+    snprintf(p, sizeof p, "%s:.backdrop", vol);
+    *len = 0;
+    if (!(fh = Open((CONST_STRPTR)p, MODE_OLDFILE))) return NULL;
+    if (Seek(fh, 0, OFFSET_END) >= 0 && (n = Seek(fh, 0, OFFSET_BEGINNING)) > 0 && n < 65536 &&
+        (buf = AllocVec((ULONG)n + 1, MEMF_ANY))) {
+        n = Read(fh, buf, n);
+        if (n < 0) n = 0;
+        buf[n] = 0;
+        *len = n;
+    }
+    Close(fh);
+    return buf;
+}
+
+/* Each line of a disk's .backdrop (":drawer/name") left out, as permanent */
+static void backdrop_read(const char *vol)
+{
+    LONG len;
+    char *buf = backdrop_text(vol, &len), *line, *next;
+    if (!buf) return;
+    for (line = buf; *line; line = next) {
+        char path[256];
+        int k;
+        for (next = line; *next && *next != '\n'; next++) ;
+        if (*next) *next++ = 0;
+        k = (int)strlen(line);
+        if (k && line[k - 1] == '\r') line[--k] = 0;
+        if (line[0] != ':' || k < 2) continue;
+        {
+            size_t vl = strlen(vol);
+            if (vl + (size_t)k >= sizeof path) continue;
+            memcpy(path, vol, vl);
+            memcpy(path + vl, line, (size_t)k + 1);
+        }
+        if ((k = lout_find(path)) >= 0) louts[k].permanent = 1;
+        else if (nlouts < MAX_LEFTOUT) {
+            snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", path);
+            louts[nlouts++].permanent = 1;
+        }
+    }
+    FreeVec(buf);
+}
+
+/* path's line taken out of its disk's .backdrop; the file goes when no line is left (OS 3.2.3's Put Away) */
+static void backdrop_forget(const char *path)
+{
+    char vol[64], p[96], *buf, *line, *next, *out;
+    const char *rest = strchr(path, ':');
+    LONG len, k = 0;
+    int n;
+    if (!rest || (n = (int)(rest - path)) >= (int)sizeof vol) return;
+    memcpy(vol, path, (size_t)n);
+    vol[n] = 0;
+    if (!(buf = backdrop_text(vol, &len))) return;
+    if (!(out = AllocVec((ULONG)len + 1, MEMF_ANY))) { FreeVec(buf); return; }
+    for (line = buf; *line; line = next) {
+        int m;
+        for (next = line; *next && *next != '\n'; next++) ;
+        if (*next) *next++ = 0;
+        m = (int)strlen(line);
+        if (m && line[m - 1] == '\r') line[--m] = 0;
+        if (!m || !ci_cmp(line, rest)) continue;
+        memcpy(out + k, line, (size_t)m);
+        k += m;
+        out[k++] = '\n';
+    }
+    snprintf(p, sizeof p, "%s:.backdrop", vol);
+    if (!k) DeleteFile((CONST_STRPTR)p);
+    else {
+        BPTR fh = Open((CONST_STRPTR)p, MODE_NEWFILE);
+        if (fh) {
+            Write(fh, out, k);
+            Close(fh);
+        }
+    }
+    FreeVec(out);
+    FreeVec(buf);
+}
+
+/* 1 when the disk holding path is among the first nv icons (the disks read) */
+static int volume_shown(const char *path, int nv)
+{
+    const char *c = strchr(path, ':');
+    int i, n = c ? (int)(c - path) : -1;
+    for (i = 0; n > 0 && i < nv; i++)
+        if ((int)strlen(icons[i].name) == n) {
+            char a[64];
+            memcpy(a, path, (size_t)n);
+            a[n] = 0;
+            if (!ci_cmp(a, icons[i].name)) return 1;
+        }
+    return 0;
+}
+
+/* After the disks: every disk's .backdrop read, then an icon for each icon left out whose disk is in (one left
+ * out for the run whose file has gone is forgotten). */
+static void leftouts_add(void)
+{
+    int nv = nicons, i;
+    for (i = 0; i < nv; i++) backdrop_read(icons[i].name);
+    for (i = 0; i < nlouts && nicons < MAX_DESK; i++) {
+        dicon *ic = &icons[nicons];
+        struct Rectangle r;
+        BPTR l;
+        if (!volume_shown(louts[i].path, nv)) continue;
+        if (!(l = Lock((CONST_STRPTR)louts[i].path, ACCESS_READ))) {
+            if (!louts[i].permanent) lout_drop(i--);
+            continue;
+        }
+        UnLock(l);
+        memset(ic, 0, sizeof *ic);
+        snprintf(ic->path, sizeof ic->path, "%s", louts[i].path);
+        snprintf(ic->name, sizeof ic->name, "%s", (const char *)FilePart((CONST_STRPTR)louts[i].path));
+        ic->kind = "";
+        ic->lo = i;
+        ic->dobj = GetIconTags((CONST_STRPTR)ic->path, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        ic->w = 48; ic->h = 40;
+        r.MinX = r.MinY = 0;
+        if (ic->dobj && GetIconRectangle(root->RPort, ic->dobj, NULL, &r, ICONDRAWA_Borderless, TRUE, TAG_DONE)) {
+            ic->w = r.MaxX - r.MinX + 1;
+            ic->h = r.MaxY - r.MinY + 1;
+        }
+        ic->lt = ic->h + LABEL_GAP;
+        if (ip.close && ic->dobj) {
+            struct Rectangle lr;
+            if (GetIconRectangle(root->RPort, ic->dobj, (STRPTR)ic->name, &lr, ICONDRAWA_Borderless, TRUE, TAG_DONE) &&
+                lr.MaxY - r.MinY - label_h > 0)
+                ic->lt = lr.MaxY - r.MinY - label_h;
+        }
+        ic->ix = -r.MinX;
+        ic->iy = -r.MinY;
+        nicons++;
+    }
+}
+
+/* wb_look's hidden: an icon left out on the desktop isn't shown in its drawer's window. The drawer's path as its
+ * disk names it is kept for the next entry (a drawer opened as "SYS:Tools" is "System:Tools") */
+static char hid_dir[256], hid_full[256];
+
+static int leftout_hidden(const char *dir, const char *name)
+{
+    char p[256];
+    size_t n;
+    if (!nlouts) return 0;
+    if (strcmp(dir, hid_dir)) {
+        snprintf(hid_dir, sizeof hid_dir, "%s", dir);
+        if (!full_name(dir, hid_full, sizeof hid_full)) snprintf(hid_full, sizeof hid_full, "%s", dir);
+    }
+    n = strlen(hid_full);
+    if (n + strlen(name) + 2 > sizeof p) return 0;
+    strcpy(p, hid_full);
+    if (n && p[n - 1] != ':') strcat(p, "/");
+    strcat(p, name);
+    return lout_find(p) >= 0;
+}
+
 /* The mounted volumes, their Disk.info (where there is none, the default icon for their kind of drive), on the
  * column grid in the Clean Up order. */
 static void scan_volumes(void)
@@ -1071,6 +1298,7 @@ static void scan_volumes(void)
         icons[nicons].kind = drive_kind(start, dl);
         icons[nicons].date = dl->dol_misc.dol_volume.dol_VolumeDate;
         icons[nicons].kb = 0;
+        icons[nicons].lo = -1;
         nicons++;
     }
     UnLockDosList(LDF_VOLUMES | LDF_DEVICES | LDF_READ);
@@ -1119,6 +1347,7 @@ static void scan_volumes(void)
         ic->ix = -r.MinX;
         ic->iy = -r.MinY;
     }
+    leftouts_add();                                 /* 0.1.35: the icons left out, after the disks */
     place_icons(0);
 }
 
@@ -1559,7 +1788,7 @@ static void titles_everywhere(void)
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
-       M_RESIZE, M_CLEANUP };
+       M_RESIZE, M_CLEANUP, M_PUTAWAY };
 
 /* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
@@ -1579,6 +1808,7 @@ static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
     { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
+    { NM_ITEM, (STRPTR)"Put Away", (STRPTR)"P", 0, 0, (APTR)M_PUTAWAY },    /* 0.1.35: icons left out, back */
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Clean Up", (STRPTR)".", 0, 0, (APTR)M_CLEANUP },    /* 0.1.33: the desktop's icons flow again */
     /* the floppy drives from the desktop (Dale, 12 Oct 2026: "attach an adf to df0 so it can be booted"):
@@ -1744,49 +1974,145 @@ static void select_only(dicon *keep)
 static dicon *pressed_on, *dragging;
 static LONG press_x, press_y, grab_dx, grab_dy;
 static LONG drag_ox, drag_oy;               /* 0.1.26: where the dragged disk icon was when the drag began */
-static struct Window *drag_img;             /* 0.1.26: its picture, while the pointer is over another window */
+static wb_ghost *drag_img;                  /* 0.1.35: its picture (wb_ghost.h), while the pointer is over another window */
+static dicon *drag_skip;                    /* 0.1.35: the icon being let go, not what it is let go on */
 
-/* 0.1.26: the disk whose icon is at (sx, sy) on the screen (ob_drop's env) */
-static int volume_at(WORD sx, WORD sy, char *out, int n)
+/* 0.1.35: the desktop's icon at (sx, sy) on the screen, not the one being let go (ob_drop's env): OB_DESK_* and its
+ * path */
+static int desk_icon_at(WORD sx, WORD sy, char *out, int n)
 {
-    dicon *ic = root ? icon_at(sx - root->LeftEdge, sy - root->TopEdge) : NULL;
-    if (!ic) return 0;
-    snprintf(out, (size_t)n, "%s", ic->path);
+    int i;
+    LONG x = root ? sx - root->LeftEdge : 0, y = root ? sy - root->TopEdge : 0;
+    if (!root) return OB_DESK_NONE;
+    for (i = nicons - 1; i >= 0; i--) {
+        dicon *ic = &icons[i];
+        LONG x0, y0, x1, y1;
+        if (ic == drag_skip) continue;
+        icon_extent(ic, &x0, &y0, &x1, &y1);
+        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+        snprintf(out, (size_t)n, "%s", ic->path);
+        if (ic->lo < 0) return OB_DESK_DISK;
+        if (ic->dobj && ic->dobj->do_Type == WBGARBAGE) return OB_DESK_TRASH;
+        if (ic->dobj && (ic->dobj->do_Type == WBDRAWER || ic->dobj->do_Type == WBDISK)) return OB_DESK_DRAWER;
+        return OB_DESK_FILE;
+    }
+    return OB_DESK_NONE;
+}
+
+static void place_icons(int clean);
+static void drop_on_desktop(dicon *ic);
+
+/* 0.1.35: icons from drawers let go on the desktop's space (ob_drop's env): left out for the run where they were
+ * let go, side by side, and gone from their drawers (read again once this round of messages is done) */
+static int leave_out(const char *const *paths, int n, WORD sx, WORD sy)
+{
+    static char added_path[MAX_LEFTOUT][256];       /* the ones left out now, to put where they were let go */
+    int i, k, added = 0;
+    for (i = 0; i < n; i++) {
+        char full[256];
+        const char *c;
+        /* kept as the disk names it, as .backdrop names them, whatever assign the drawer was opened through */
+        if (!full_name(paths[i], full, sizeof full) || !(c = strchr(full, ':')) || !c[1]) continue;     /* a disk */
+        if (lout_find(full) >= 0 || nlouts == MAX_LEFTOUT) continue;
+        snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", full);
+        louts[nlouts++].permanent = 0;
+        memcpy(added_path[added++], full, sizeof full);
+    }
+    if (!added || !root) return added > 0;
+    scan_volumes();
+    for (i = 0, k = 0; i < nicons; i++) {
+        dicon *ic = &icons[i];
+        LONG nx, ny;
+        int j, mine = 0;
+        if (ic->lo < 0) continue;
+        for (j = 0; j < added && !mine; j++) mine = !ci_cmp(ic->path, added_path[j]);
+        if (!mine) continue;
+        nx = sx - root->LeftEdge - ic->w / 2 + k++ * (ic->w + 16);
+        ny = sy - root->TopEdge - ic->h / 2;
+        ic->ix += nx - ic->x;
+        ic->iy += ny - ic->y;
+        ic->x = nx;
+        ic->y = ny;
+        drop_on_desktop(ic);                        /* its place the user's, on the grid, the others round it */
+    }
+    redraw_all();
+    reread_pending = 1;
     return 1;
 }
 
-static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, volume_at };
-
-static void drag_img_close(void)
+/* 0.1.35: a job has ended (ob_drop's env): an icon left out whose file has gone (moved into a drawer, to the trash)
+ * goes from the desktop, and from its disk's .backdrop */
+static void leftouts_check(void)
 {
-    if (drag_img) {
-        CloseWindow(drag_img);
-        drag_img = NULL;
+    int i, gone = 0;
+    for (i = 0; i < nlouts; i++) {
+        BPTR l = Lock((CONST_STRPTR)louts[i].path, ACCESS_READ);
+        if (l) {
+            UnLock(l);
+            continue;
+        }
+        if (IoErr() != ERROR_OBJECT_NOT_FOUND) continue;     /* its disk is out, say: it comes back with it */
+        if (louts[i].permanent) backdrop_forget(louts[i].path);
+        lout_drop(i--);
+        gone = 1;
+    }
+    if (gone && root) {
+        scan_volumes();
+        redraw_all();
+        reread_pending = 1;
     }
 }
 
-/* The dragged disk icon's picture at (sx, sy) on the screen, above the windows, as a drawer's icons are
- * dragged (opengadtools wb_drawer.c's drag_start): it is opened the first time the pointer leaves the
- * desktop for another window */
+/* 0.1.35: Icons > Put Away: the selected icons left out go back to their drawers (and out of .backdrop) */
+static void put_away(void)
+{
+    int i, any = 0;
+    for (i = 0; i < nicons; i++) {
+        int k;
+        if (!icons[i].selected || icons[i].lo < 0 || (k = lout_find(icons[i].path)) < 0) continue;
+        if (louts[k].permanent) backdrop_forget(louts[k].path);
+        lout_drop(k);
+        any = 1;
+    }
+    if (!any) return;
+    scan_volumes();
+    redraw_all();
+    reread_pending = 1;
+}
+
+static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, desk_icon_at, leave_out, leftouts_check };
+
+static void drag_img_close(void)
+{
+    wb_ghost_free(drag_img);
+    drag_img = NULL;
+}
+
+/* The dragged icon's picture at (sx, sy) on the screen, above the windows, as a drawer's icons are dragged
+ * (opengadtools wb_drawer.c's drag_start): it is made the first time the pointer leaves the desktop for another
+ * window. 0.1.35: the icon itself, with its alpha (wb_ghost.h); before, a window with the icon on its own
+ * background */
 static void drag_img_at(dicon *ic, LONG sx, LONG sy)
 {
     if (!drag_img) {
-        if (!ic->dobj || !look.scr) return;
-        drag_img = OpenWindowTags(NULL, WA_Left, sx, WA_Top, sy, WA_Width, ic->w, WA_Height, ic->h,
-                                  WA_Borderless, TRUE, WA_Activate, FALSE, WA_RMBTrap, TRUE, WA_AutoAdjust, TRUE,
-                                  WA_SmartRefresh, TRUE, WA_CustomScreen, (ULONG)look.scr, TAG_DONE);
-        if (!drag_img) return;
-        DrawIconState(drag_img->RPort, ic->dobj, NULL, ic->ix - ic->x, ic->iy - ic->y, IDS_SELECTED,
-                      ICONDRAWA_Frameless, TRUE, ICONDRAWA_Borderless, TRUE, ICONDRAWA_EraseBackground, TRUE,
-                      ICONDRAWA_DrawInfo, (ULONG)dri, TAG_DONE);
-        return;
+        if (!ic->dobj || !look.scr || !(drag_img = wb_ghost_icon(look.scr, ic->dobj, dri))) return;
     }
-    if (sx > look.scr->Width - drag_img->Width) sx = look.scr->Width - drag_img->Width;
-    if (sy > look.scr->Height - drag_img->Height) sy = look.scr->Height - drag_img->Height;
-    if (sx < 0) sx = 0;
-    if (sy < 0) sy = 0;
-    if (sx != drag_img->LeftEdge || sy != drag_img->TopEdge)
-        MoveWindow(drag_img, (WORD)(sx - drag_img->LeftEdge), (WORD)(sy - drag_img->TopEdge));
+    wb_ghost_move(drag_img, (int)sx, (int)sy);
+}
+
+/* 0.1.35: the selected desktop icons (and the one dragged) let go over another window, or onto a desktop icon:
+ * each disk's contents copied (ob_drop_volume), the icons left out going as from a drawer (ob_drop) */
+static void drop_selected(dicon *dragged, WORD sx, WORD sy, UWORD qual)
+{
+    const char *paths[MAX_LEFTOUT];
+    int i, n = 0;
+    for (i = 0; i < nicons; i++) {
+        dicon *ic = &icons[i];
+        if (!ic->selected && ic != dragged) continue;
+        if (ic->lo < 0) ob_drop_volume(ic->path, sx, sy, qual);
+        else if (n < MAX_LEFTOUT) paths[n++] = ic->path;
+    }
+    if (n) ob_drop(paths, n, sx, sy, qual, NULL);
 }
 static ULONG last_secs, last_micros;
 static dicon *last_click;
@@ -1803,10 +2129,22 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
     case IDCMP_MOUSEBUTTONS:
         if (code == SELECTDOWN) {
             dicon *ic = icon_at(mx, my);
+            if (ic && (qual & IEQUALIFIER_LALT)) {
+                /* 0.1.35: Alt held at the press: the icon taken out of the selection, and no drag (OS 3.2.3's,
+                 * measured on lab t4-dnd) */
+                last_click = NULL;
+                pressed_on = NULL;
+                if (ic->selected) {
+                    ic->selected = 0;
+                    redraw_around(ic);
+                }
+                break;
+            }
             if (ic && ic == last_click && DoubleClick(last_secs, last_micros, secs, micros)) {
                 last_click = NULL;
                 pressed_on = NULL;
-                open_drawer(ic->path);
+                if (ic->lo >= 0) ob_open_object(ic->path);  /* 0.1.35: left out: what it stands for */
+                else open_drawer(ic->path);
                 break;
             }
             last_click = ic;
@@ -1828,17 +2166,24 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
         } else if (code == SELECTUP) {
             if (dragging) {
                 /* 0.1.26: let go over another window: into that drawer, or to that program's AppWindow;
-                 * the disk's icon goes back where it was */
+                 * the disk's icon goes back where it was. 0.1.35: every selected icon goes, the icons left out
+                 * as from a drawer; and onto a disk, a drawer or the trash on the desktop the same way */
                 WORD sx = (WORD)(root->LeftEdge + mx), sy = (WORD)(root->TopEdge + my);
                 struct Window *w;
+                char on[256];
+                int k;
+                dicon *dr = dragging;
                 drag_img_close();
-                w = ob_drop_window_at(sx, sy);
-                if (w && w != root) {
-                    if (dragging->x != drag_ox || dragging->y != drag_oy) move_icon(dragging, drag_ox, drag_oy);
-                    ob_drop_volume(dragging->path, sx, sy, qual);
-                } else
-                    drop_on_desktop(dragging);      /* 0.1.34: the user's place, on the grid */
                 dragging = NULL;
+                w = ob_drop_window_at(sx, sy);
+                drag_skip = dr;
+                k = w == root ? desk_icon_at(sx, sy, on, sizeof on) : OB_DESK_NONE;
+                if ((w && w != root) || k == OB_DESK_DISK || k == OB_DESK_DRAWER || k == OB_DESK_TRASH) {
+                    if (dr->x != drag_ox || dr->y != drag_oy) move_icon(dr, drag_ox, drag_oy);
+                    drop_selected(dr, sx, sy, qual);
+                } else
+                    drop_on_desktop(dr);            /* 0.1.34: the user's place, on the grid */
+                drag_skip = NULL;
                 draw_icons();
             }
             pressed_on = NULL;
@@ -1855,7 +2200,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             dragging = pressed_on;
             /* 0.1.26: over another window, its picture follows the pointer above the windows; the icon
              * stays where it was last on the desktop */
-            w = ob_drop_window_under((WORD)(root->LeftEdge + mx), (WORD)(root->TopEdge + my), drag_img);
+            w = ob_drop_window_under((WORD)(root->LeftEdge + mx), (WORD)(root->TopEdge + my), wb_ghost_window(drag_img));
             if (w && w != root) {
                 drag_img_at(dragging, root->LeftEdge + nx, root->TopEdge + ny);
                 break;
@@ -1871,6 +2216,8 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
         break;
     case IDCMP_DISKINSERTED:
     case IDCMP_DISKREMOVED:
+        drag_img_close();                           /* 0.1.35: a drag ends with the icons it was of */
+        dragging = pressed_on = last_click = NULL;
         scan_volumes();
         EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
         draw_icons();
@@ -1896,12 +2243,14 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 int i;
                 for (i = 0; i < nicons; i++)
                     if (icons[i].selected) {
-                        if (id == M_ICON_OPEN) open_drawer(icons[i].path);
+                        if (id == M_ICON_OPEN && icons[i].lo >= 0) ob_open_object(icons[i].path);
+                        else if (id == M_ICON_OPEN) open_drawer(icons[i].path);
                         else if (!ob_info_open(look.scr, icons[i].path)) DisplayBeep(look.scr);
                     }
                 break;
             }
             case M_REDRAW: redraw_all(); break;
+            case M_PUTAWAY: put_away(); break;      /* 0.1.35 */
             case M_CLEANUP:
                 place_icons(1);
                 redraw_all();
@@ -2510,6 +2859,7 @@ static int run(void)
     look.info_object = ob_info_object;
     look.screen_title = screen_title;
     look.drop = ob_drop;                           /* 0.1.26: icons dragged out of a drawer */
+    look.hidden = leftout_hidden;                  /* 0.1.35: icons left out aren't shown in their drawers */
     wb_prefs_load();
     aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */
     if (!desktop_up()) goto out;
@@ -2689,6 +3039,10 @@ static int run(void)
                 }
         }
         if (quit) break;
+        if (reread_pending) {                       /* 0.1.35: icons left out or put away: their drawers again */
+            reread_pending = 0;
+            for (i = 0; i < ndrawers; i++) wb_drawer_reread(drawers[i]);
+        }
         if (want_resize) {
             want_resize = 0;
             if (root && !reset_busy) resize_to_window();
