@@ -427,12 +427,28 @@ static int copy_volume(of_ctx *c, job *j)
     c->fs->list(c->fs, j->volume, name_add, &l);
     if (!(src = AllocVec((ULONG)(l.n + 1) * sizeof *src, MEMF_ANY | MEMF_CLEAR))) rc = OF_ERR_NOMEM;
     for (i = 0; rc == OF_OK && i < l.n; i++) {
-        /* the disk's own icon stays: the new drawer has none of its own (3.2.3 copies it in, as a file) */
+        /* the disk's own icon stays on the disk (3.2.3 copies it in, as a file, and the new drawer is left without
+         * an icon of its own, so it can't be seen until Show All Files): the new drawer gets a drawer's icon below */
         if (!of_name_cmp(l.v[i], "Disk.info") || !of_path_join(path, j->volume, l.v[i])) continue;
         if (!(src[m] = AllocVec(strlen(path) + 1, MEMF_ANY))) { rc = OF_ERR_NOMEM; break; }
         strcpy(src[m++], path);
     }
     if (rc == OF_OK && m) rc = of_copy(c, (const char *const *)src, m, into);
+    /* the new drawer's icon: the default drawer's, placed by the window that shows it (kept even when the copy
+     * stopped part-way, as the drawer and what was copied stay) */
+    if ((k = (int)strlen(into)) + 6 <= (int)sizeof path) {
+        struct DiskObject *o;
+        memcpy(path, into, (size_t)k);
+        memcpy(path + k, ".info", 6);
+        if (c->fs->stat(c->fs, path, &st) != OF_OK || st.type == OF_NONE) {
+            if ((o = GetDefDiskObject(WBDRAWER))) {
+                o->do_CurrentX = NO_ICON_POSITION;
+                o->do_CurrentY = NO_ICON_POSITION;
+                PutDiskObject((STRPTR)into, o);
+                FreeDiskObject(o);
+            }
+        }
+    }
     for (i = 0; src && i < m; i++) FreeVec(src[i]);
     if (src) FreeVec(src);
     for (i = 0; i < l.n; i++) FreeVec(l.v[i]);
