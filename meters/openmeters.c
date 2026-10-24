@@ -1071,9 +1071,9 @@ static int open_panel(void)
     /* what is behind the panel, before the window is there (a window over its place is copied too: then the
      * copy is made again once it has gone) */
     copy_dirty = covered(x, y, w, h);
-    /* 0.2.5: smaller than it was, or moved (a smaller font): the desktop where the panel was may not be drawn
-     * again yet, and the copy kept the old panel's edge; copied again at the next tick */
-    if (was_w && (was_x < x || was_y < y || was_x + was_w > x + w || was_y + was_h > y + h)) copy_dirty = 1;
+    /* 0.2.5: in another box than it was (another font's size, a drag): the desktop where the panel was may not
+     * be drawn again yet, and the copy kept the old panel's edges; copied again at the next tick */
+    if (was_w && (was_x != x || was_y != y || was_w != w || was_h != h)) copy_dirty = 1;
     was_w = 0;
     card = truecolour();
     if (card) {
