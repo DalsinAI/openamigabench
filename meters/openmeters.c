@@ -76,8 +76,8 @@
 #include "ogt_theme.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.3"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (20.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENMETERS_VERSION "0.2.4"
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
@@ -252,8 +252,8 @@ static void memory_row(const char *label, ULONG type)
     r->fill = used_of(total - freeb, total);
 }
 
-/* The graphics card's video RAM, from its AutoConfig board (ACRTG: 16 MiB, product 9; 64 MiB, product 15; the
- * first and last 64 KB pages are its ROM and its registers). */
+/* The graphics card's video RAM, from its AutoConfig board (ACRTG: 16 MiB, product 9; 64 MiB, product 15;
+ * 256 MiB, product 16; the first and last 64 KB pages are its ROM and its registers). */
 static void video_row(void)
 {
     struct ConfigDev *cd = NULL;
@@ -262,7 +262,7 @@ static void video_row(void)
     row *r;
     if (!(ExpansionBase = (struct ExpansionBase *)OpenLibrary((STRPTR)"expansion.library", 36))) return;
     while ((cd = FindConfigDev(cd, 0xDA15, -1)))
-        if ((cd->cd_Rom.er_Product == 9 || cd->cd_Rom.er_Product == 15) && cd->cd_BoardSize > 0x20000UL)
+        if ((cd->cd_Rom.er_Product == 9 || cd->cd_Rom.er_Product == 15 || cd->cd_Rom.er_Product == 16) && cd->cd_BoardSize > 0x20000UL)
             total += cd->cd_BoardSize - 0x20000UL;
     CloseLibrary((struct Library *)ExpansionBase);
     ExpansionBase = NULL;

@@ -137,8 +137,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.28"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (19.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENBENCH_VERSION "0.1.29"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -309,6 +309,8 @@ static void count_boards(void)
     while ((cd = FindConfigDev(cd, 0xDA15, 9)) && gpus < 16) gpus++;
     cd = NULL;
     while ((cd = FindConfigDev(cd, 0xDA15, 15)) && gpus < 16) gpus++;
+    cd = NULL;
+    while ((cd = FindConfigDev(cd, 0xDA15, 16)) && gpus < 16) gpus++;   /* the 256 MiB board (24 Oct 2026) */
     if ((cd = FindConfigDev(NULL, 0xDA15, 7)) && cd->cd_BoardAddr) {
         volatile ULONG *r = (volatile ULONG *)cd->cd_BoardAddr;
         if (r[0] == 0x41435356UL && r[0x20 / 4] == 2 && r[0x24 / 4] <= 1024) { cores = r[0x24 / 4]; isas = r[0x28 / 4] | 1; }
