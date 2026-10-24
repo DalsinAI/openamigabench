@@ -1086,7 +1086,12 @@ static void backdrop_read(const char *vol)
         k = (int)strlen(line);
         if (k && line[k - 1] == '\r') line[--k] = 0;
         if (line[0] != ':' || k < 2) continue;
-        snprintf(path, sizeof path, "%s%s", vol, line);
+        {
+            size_t vl = strlen(vol);
+            if (vl + (size_t)k >= sizeof path) continue;
+            memcpy(path, vol, vl);
+            memcpy(path + vl, line, (size_t)k + 1);
+        }
         if ((k = lout_find(path)) >= 0) louts[k].permanent = 1;
         else if (nlouts < MAX_LEFTOUT) {
             snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", path);
