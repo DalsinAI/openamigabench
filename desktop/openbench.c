@@ -48,7 +48,7 @@
  *     the Workbench screen at the size the host's window asks for, and the 2-second timer does it when a page
  *     asks the Amiga to follow now (openrtg's ASK). Another program's window blocks it, as it blocks any
  *     reset: a requester names them, with Try Again and Cancel;
- *   - the dock (0.1.23; Dale, 17 October 2026): no longer built in: OpenDock, a program of its own (C:OpenDock),
+ *   - the dock (0.1.23; the user, 17 October 2026): no longer built in: OpenDock, a program of its own (C:OpenDock),
  *     is started by name when ENV:OpenDock/Dock is there. (0.1.23 to 0.1.31 also listed ROM:Prefs's editors in
  *     SYS:Prefs's window; the ROM has no ROM: volume since the no-ROM-volume design of 24 October 2026);
  * Window frames are OpenFrames' (OpenLook), as on every window.
@@ -1448,7 +1448,7 @@ static int workbench_there(void)
 
 /* ---- the dock: OpenDock, C:OpenDock -----------------------------------------------------------------------
  *
- * Dale, 17 Oct 2026: the dock "only shows if there's a preferences file". OpenDock runs as a program of its own,
+ * The user, 17 Oct 2026: the dock "only shows if there's a preferences file". OpenDock runs as a program of its own,
  * started here by name, so the Shell finds C:OpenDock (OpenUp's; the dock left the ROM with the no-ROM-volume
  * design, 24 October 2026, section 7.4). It is started only when ENV:OpenDock/Dock is there (the
  * Startup-sequence has put ENVARC: in ENV: by now) and none runs (its port, "OpenDock"): with no settings file
