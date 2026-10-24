@@ -22,8 +22,8 @@
  * are its arguments:
  *   CORNER=TOPRIGHT       TOPLEFT, TOPRIGHT, BOTTOMLEFT or BOTTOMRIGHT of the screen (default TOPRIGHT)
  *   LEFT=n TOP=n          a place of its own instead (the place it was dragged to is kept: ENVARC:OpenMeters.place)
- *   BARWIDTH=n            the bars' width in pixels (default 200 at a 13-pixel font, in proportion to the font;
- *                         never narrower than the numbers in them)
+ *   BARWIDTH=n            the bars' width in pixels at a 13-pixel font (default 200), in proportion to the font
+ *                         (0.2.5); never narrower than the numbers in them
  *   REFRESH=n             seconds between readings (default 2)
  *   NODATE NOMEMORY NOVIDEO NOVOLUMES   leave those out
  *   RAM                   show RAM: too
@@ -40,8 +40,8 @@
  * 0.2.5 (the user's solid OS list, 24 October 2026: OpenMeters' text much larger than the icon labels): the text
  * is in the icons' font, Font prefs' Workbench icon text font at its size, or with none set the theme's, which
  * OpenBench draws its icon labels in (ogt_open_font), not the screen's, which the open ROM sizes to a tall
- * screen's bar. The rows and bars are sized from it (the bars' default width is 200 at a 13-pixel font) and a bar
- * is never narrower than the number in it, which was cut off ("1,371 MBy"). Each pixel of a number is in
+ * screen's bar. The rows and bars are sized from it (BARWIDTH, 200 by default and in OpenMeters' icon, is the
+ * width at a 13-pixel font) and a bar is never narrower than the number in it, which was cut off ("1,371 MBy"). Each pixel of a number is in
  * whichever of its two colours stands out more from what is under it: white over the bar's light grey track,
  * where a fill ended under a number, was hard to read. A change of Font prefs is followed as one of the look.
  *
@@ -121,8 +121,7 @@ static struct {
     int corner;                    /* 0 TL, 1 TR, 2 BL, 3 BR */
     int nodate, nomemory, novideo, novolumes, ram;
     char hide[200];
-    int barwidth_set;              /* BARWIDTH given: that width, else 200 in proportion to the font */
-} opt = { -1, -1, 200, 2, 1, 0, 0, 0, 0, 0, "", 0 };
+} opt = { -1, -1, 200, 2, 1, 0, 0, 0, 0, 0, "" };
 
 static struct Screen *scr;
 static struct Window *win;
@@ -161,8 +160,7 @@ static void tooltypes(struct WBStartup *wbs)
     if (!dob) return;
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"LEFT"))) StrToLong((STRPTR)v, &opt.left);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"TOP"))) StrToLong((STRPTR)v, &opt.top);
-    if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"BARWIDTH")) && StrToLong((STRPTR)v, &opt.barwidth) > 0)
-        opt.barwidth_set = 1;
+    if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"BARWIDTH"))) StrToLong((STRPTR)v, &opt.barwidth);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"REFRESH"))) StrToLong((STRPTR)v, &opt.refresh);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"CORNER"))) opt.corner = corner_of(v);
     if ((v = (char *)FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (STRPTR)"HIDE"))) strncpy(opt.hide, v, sizeof opt.hide - 1);
@@ -858,9 +856,9 @@ static void measure(WORD *w, WORD *h)
         if (t > label_w) label_w = t;
         if (v > vw) vw = v;
     }
-    /* 0.2.5: the bars in proportion to the font (200 at 13 pixels), unless BARWIDTH says; never narrower than the
-     * widest number and its margins (it was cut off), nor than they were while the panel is open */
-    bar_w = (WORD)(opt.barwidth_set ? opt.barwidth : (opt.barwidth * font->tf_YSize + 6) / 13);
+    /* 0.2.5: the bars in proportion to the font (BARWIDTH at 13 pixels); never narrower than the widest number and
+     * its margins (it was cut off), nor than they were while the panel is open */
+    bar_w = (WORD)((opt.barwidth * font->tf_YSize + 6) / 13);
     if (bar_w < vw + 12 + br) bar_w = vw + 12 + br;
     if (bar_w < bar_min) bar_w = bar_min;
     if (bar_w > 800) bar_w = 800;
@@ -1239,7 +1237,7 @@ int main(int argc, char **argv)
         if (a[0]) opt.corner = corner_of((const char *)a[0]);
         if (a[1]) opt.left = *(LONG *)a[1];
         if (a[2]) opt.top = *(LONG *)a[2];
-        if (a[3]) { opt.barwidth = *(LONG *)a[3]; opt.barwidth_set = 1; }
+        if (a[3]) opt.barwidth = *(LONG *)a[3];
         if (a[4]) opt.refresh = *(LONG *)a[4];
         opt.nodate = a[5] != 0;
         opt.nomemory = a[6] != 0;
