@@ -1,28 +1,40 @@
 /* ob_drop: icons let go on the desktop's windows (W67; Dale, 18 October 2026: "drag and drop doesn't seem to
- * work", "dragging icons 'into' windows"), as OS 3.2.3's Workbench does it (measured on lab t5-mouse,
- * LoadWB on the stock ROM, 18 October 2026):
+ * work", "dragging icons 'into' windows"; 24 October 2026: icons dragged between windows "as Workbench does").
+ * What OS 3.2.3's Workbench does is the spec: measured on lab t4-dnd (OS 3.2.3, stock ROM 47.115, LoadWB and
+ * workbench.library 47.42, 24 October 2026), from the screen, the files and the lists only:
  *
- *   - into another drawer window (its space, or a file's icon in it): moved when it is on the same volume,
- *     copied to another volume; the copy shows its progress with a Stop button;
- *   - onto a drawer's icon (in any window, this one too) or a disk's icon on the desktop: into it, the same
- *     way;
- *   - a disk's icon from the desktop into a drawer window: the disk's contents copied (here into a new drawer
- *     named after the disk, so they never mix with what is there);
+ *   - into another drawer window (its space, or a file's icon in it), or onto a drawer's icon (in any window,
+ *     this one too) or a disk's icon on the desktop: moved when it is on the same volume, copied to another;
+ *   - the qualifier keys don't change that. Shift, Alt, Ctrl, either Amiga key, Right Alt or Right Shift held as
+ *     the icons are let go (pressed on the lab's own keyboard, and as the events' qualifiers) gave the same move
+ *     or copy as none. At the press, Shift adds to the selection (so several go), Alt takes the icon out of it
+ *     (no drag starts), and Left Amiga is Intuition's screen drag;
+ *   - a name already there, on a copy: Workbench's requester, "Error while copying "name" / object already
+ *     exists", Replace, Replace all, Skip, Skip all, Cancel; on a move within the volume no question, the icon
+ *     stays and the screen's title says "Error while moving name: (203) object already exists";
+ *   - onto a trashcan's icon: what is on its volume goes into it; from another volume nothing happens;
+ *   - onto the desktop's own space: left out there for this run (gone from its drawer, back in it after a
+ *     reboot; .backdrop isn't written: only Icons > Leave Out writes it, ":drawer/name" a line);
+ *   - a disk's icon into a drawer: a new drawer named after the disk, with what the disk holds;
+ *   - a copy shows its progress ("Copying name", a bar, Stop) after a moment; Stop leaves the files done and
+ *     takes away the one being written;
+ *   - a full disk: the copy starts, and DOS asks "Volume X is full", Retry or Cancel (room can be made and the
+ *     copy goes on); a write-protected disk: DOS's "Volume X is write protected", Retry or Cancel;
  *   - onto a program's AppWindow (or one of its drop zones): one AppMessage, AMTYPE_APPWINDOW (or
  *     AMTYPE_APPWINDOWZONE) with the AppWindow's (or the zone's) id and userdata, the place in the window,
  *     and one WBArg per icon: a drawer or disk as its own lock and an empty name, a file as its drawer's
- *     lock and its name. OpenBench sends it (it is the desktop) and frees it, unlocking, when the program
- *     replies. Which AppWindow is under the pointer, workbench.library says (the Team's OWBCTRLA_AppWindowAt;
- *     amigachrome-guest libraries/openworkbench/owb_team.h);
- *   - onto a tool's icon: nothing is started (3.2.3 puts the icon down there);
- *   - in its own drawer, off a drawer's icon: nothing (OpenBench's drawers keep their icons in order);
- *   - onto the desktop's own space: Leave Out (not yet: Phase B).
+ *     lock and its name (0.1.26, lab t5-mouse). OpenBench sends it (it is the desktop) and frees it, unlocking,
+ *     when the program replies. Which AppWindow is under the pointer, workbench.library says (the Team's
+ *     OWBCTRLA_AppWindowAt; amigachrome-guest libraries/openworkbench/owb_team.h);
+ *   - onto a tool's icon: nothing is started (it goes into that drawer); in its own drawer, off a drawer's
+ *     icon: nothing (OpenBench's drawers keep their icons in order).
  *
- * The copies and moves are OpenFiles' engine's (openamigafilemanager engine/of_ops.c), as OpenBench's header
- * planned: a file goes with its .info, a copy is written under a temporary name until it is whole, a file
- * replaced goes to the trash, a move between volumes is a copy read back before the source goes. Each drop
- * runs in a process of its own, so the desktop never waits for a disk; when it is done, the drawers it
- * touched are read again.
+ * The copies and moves are OpenFiles' engine's (openamigafilemanager engine/of_ops.c), as OpenBench's design
+ * says (5.3), and so they differ from 3.2.3's on purpose where the engine keeps files safe: a file goes with its
+ * .info, a copy is written under a temporary name until it is whole (so nothing half written is ever left, and
+ * there is no "Remove incomplete object?" to ask), a file replaced goes to the trash, a move between volumes is a
+ * copy read back before the source goes. Each drop runs in a process of its own, so the desktop never waits for
+ * a disk (3.2.3's Workbench waits for its copy); when it is done, the drawers it touched are read again.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <stdio.h>
@@ -47,6 +59,7 @@
 #include <proto/layers.h>
 #include <proto/gadtools.h>
 #include <proto/wb.h>
+#include <proto/icon.h>
 
 #include "ob_drop.h"
 #include "of_ops.h"
@@ -141,15 +154,17 @@ static int same_volume(const char *a, const char *b)
     return r == LOCK_SAME || r == LOCK_SAME_VOLUME;
 }
 
-/* ---- the jobs: a copy or a move, in a process of its own ---- */
+/* ---- the jobs: a copy, a move or a trip to the trash, in a process of its own ---- */
 
 #define JOB_DIRS 8                              /* drawers to read again afterwards: where it went, where from */
 #define WIN_W 440
 
+enum { OP_COPY = 0, OP_MOVE, OP_TRASH, OP_DISK };
+
 typedef struct job {
     struct Message msg;                         /* to done_port when it ends */
     struct Screen *scr;                         /* the job's: locked while its window is up */
-    int move;                                   /* 1: a move (one volume), 0: a copy */
+    int op;                                     /* OP_*: a copy, a move (one volume), to the trash, a disk */
     int n;
     char **src;
     char dst[OF_PATH_MAX];
@@ -165,6 +180,16 @@ typedef struct job {
     int tried, stopped, failed, first_err, rc;
     char first_failed[OF_PATH_MAX];
 } job;
+
+static const char *op_doing(const job *j)
+{
+    return j->op == OP_MOVE ? "Moving" : j->op == OP_TRASH ? "Moving to the trash" : "Copying";
+}
+
+static const char *op_done(const job *j)
+{
+    return j->op == OP_MOVE ? "moved" : j->op == OP_TRASH ? "put in the trash" : "copied";
+}
 
 static void job_free(job *j)
 {
@@ -214,7 +239,7 @@ static void job_window(job *j)
     ng.ng_Flags = PLACETEXT_IN;
     if (!CreateGadgetA(BUTTON_KIND, g, &ng, NULL)) return;
     j->win = OpenWindowTags(NULL, WA_Left, (s->Width - WIN_W) / 2, WA_Top, (s->Height - h) / 3, WA_Width, WIN_W,
-                            WA_Height, h, WA_Title, (ULONG)(j->move ? "Moving" : "Copying"), WA_DragBar, TRUE,
+                            WA_Height, h, WA_Title, (ULONG)op_doing(j), WA_DragBar, TRUE,
                             WA_DepthGadget, TRUE, WA_Activate, FALSE, WA_SmartRefresh, TRUE, WA_RMBTrap, TRUE,
                             WA_PubScreen, (ULONG)s, WA_Gadgets, (ULONG)j->glist,
                             WA_IDCMP, BUTTONIDCMP | IDCMP_REFRESHWINDOW, TAG_DONE);
@@ -256,7 +281,7 @@ static void job_draw(job *j, const of_progress *p)
     RectFill(rp, (WORD)x, (WORD)y, (WORD)(x + w - 1), (WORD)(y + 2 * (fh + 6) + 14));
     SetAPen(rp, pens[TEXTPEN]);
     SetDrMd(rp, JAM1);
-    snprintf(line, sizeof line, "%s %lu of %lu to %s", j->move ? "Moving" : "Copying", (unsigned long)p->files_done + 1,
+    snprintf(line, sizeof line, "%s %lu of %lu to %s", op_doing(j), (unsigned long)p->files_done + 1,
              (unsigned long)(p->files_total ? p->files_total : 1), j->dst);
     if (p->files_done >= p->files_total && p->files_total) line[0] = 0;
     text_at(rp, x, y, w, line);
@@ -298,25 +323,38 @@ static int job_progress(void *user, const of_progress *p)
     return j->stopped || stopping;
 }
 
-/* A name that is taken: asked, as OpenFiles asks */
+/* A move within the volume onto a name that is taken: not asked about (3.2.3 doesn't ask), the end says so */
+static void job_report_clash(job *j, const char *src)
+{
+    if (!j->failed++) {
+        of_strlcpy(j->first_failed, src, OF_PATH_MAX);
+        j->first_err = OF_ERR_EXISTS;
+    }
+}
+
+/* A name that is taken. A copy asks as OS 3.2.3's Workbench asks (its words and its five answers; Replace sends
+ * the old one to the trash, the engine's rule). A move within the volume isn't asked about, as on 3.2.3: that
+ * one stays where it is, and the end says why (job_report). */
 static int job_ask(void *user, const of_clash *c)
 {
     job *j = user;
     struct EasyStruct es;
-    char dir[OF_PATH_MAX];
     LONG r;
-    of_path_parent(dir, c->dst);
+    if (j->op != OP_COPY && j->op != OP_DISK) {
+        job_report_clash(j, c->src);
+        return OF_CLASH_SKIP;
+    }
     es.es_StructSize = sizeof es;
     es.es_Flags = 0;
-    es.es_Title = (UBYTE *)(j->move ? "Moving" : "Copying");
-    es.es_TextFormat = (UBYTE *)"\"%s\" is already in\n%s.";
-    es.es_GadgetFormat = (UBYTE *)"Replace|Replace all|Keep both|Skip|Stop";
-    r = EasyRequest(j->win, &es, NULL, (ULONG)of_path_name(c->dst), (ULONG)dir);
+    es.es_Title = (UBYTE *)"Workbench";
+    es.es_TextFormat = (UBYTE *)"Error while copying \"%s\"\nobject already exists";
+    es.es_GadgetFormat = (UBYTE *)"Replace|Replace all|Skip|Skip all|Cancel";
+    r = EasyRequest(j->win, &es, NULL, (ULONG)of_path_name(c->dst));
     switch (r) {
     case 1: return OF_CLASH_REPLACE;
     case 2: return OF_CLASH_REPLACE | OF_CLASH_ALL;
-    case 3: return OF_CLASH_KEEP_BOTH;
-    case 4: return OF_CLASH_SKIP;
+    case 3: return OF_CLASH_SKIP;
+    case 4: return OF_CLASH_SKIP | OF_CLASH_ALL;
     default: return OF_CLASH_CANCEL;
     }
 }
@@ -328,13 +366,16 @@ static void job_report(void *user, const char *path, int err)
         of_strlcpy(j->first_failed, path, OF_PATH_MAX);
         j->first_err = err;
     }
+    /* a full or write-protected disk: DOS has asked already, Retry or Cancel (room can be made meanwhile), and
+     * this is the Cancel; the rest isn't tried, as 3.2.3 stops its copy there */
+    if (err == OF_ERR_FULL || err == OF_ERR_READONLY) j->stopped = 1;
 }
 
 static const char *err_text(int e)
 {
     switch (e) {
     case OF_ERR_NOTFOUND: return "it isn't there any more";
-    case OF_ERR_EXISTS: return "the name is taken";
+    case OF_ERR_EXISTS: return "object already exists";
     case OF_ERR_FULL: return "the disk is full";
     case OF_ERR_VERIFY: return "the copy didn't read back the same";
     case OF_ERR_INVALID: return "a drawer can't go into itself";
@@ -386,7 +427,7 @@ static int copy_volume(of_ctx *c, job *j)
     c->fs->list(c->fs, j->volume, name_add, &l);
     if (!(src = AllocVec((ULONG)(l.n + 1) * sizeof *src, MEMF_ANY | MEMF_CLEAR))) rc = OF_ERR_NOMEM;
     for (i = 0; rc == OF_OK && i < l.n; i++) {
-        /* the disk's own icon stays: the new drawer has none of its own */
+        /* the disk's own icon stays: the new drawer has none of its own (3.2.3 copies it in, as a file) */
         if (!of_name_cmp(l.v[i], "Disk.info") || !of_path_join(path, j->volume, l.v[i])) continue;
         if (!(src[m] = AllocVec(strlen(path) + 1, MEMF_ANY))) { rc = OF_ERR_NOMEM; break; }
         strcpy(src[m++], path);
@@ -399,6 +440,25 @@ static int copy_volume(of_ctx *c, job *j)
     return rc;
 }
 
+/* The space left on a disk, as the engine asks before a copy: not told, so the copy starts and DOS says when the
+ * disk is full, with Retry, as on OS 3.2.3 (OpenBench's design 5.11: room can be made and the job goes on). The
+ * engine, told nothing, lets the writes say. */
+static int no_free_bytes(of_fs *fs, const char *path, uint64_t *out)
+{
+    (void)fs;
+    (void)path;
+    *out = 0;
+    return OF_ERR_IO;
+}
+
+/* The trash drawer the engine keeps on dst's volume ("Work:Trashcan"): of_delete files them there, with a note of
+ * where each was, so OpenFiles can put them back */
+static int is_engine_trash(of_ctx *c, const char *dst)
+{
+    char vol[OF_PATH_MAX], t[OF_PATH_MAX];
+    return of_path_volume(vol, dst) && of_path_join(t, vol, c->trash) && of_path_equal(t, dst);
+}
+
 /* The job's process */
 static void job_entry(void)
 {
@@ -406,29 +466,36 @@ static void job_entry(void)
     of_fs fs;
     of_ctx c;
     of_fs_amiga_init(&fs);
+    fs.free_bytes = no_free_bytes;
     of_ctx_init(&c, &fs);
     c.user = j;
     c.ask = job_ask;
     c.progress = job_progress;
     c.report = job_report;
     CurrentTime(&j->t0s, &j->t0m);
-    if (j->volume[0]) j->rc = copy_volume(&c, j);
-    else if (j->move) j->rc = of_move(&c, (const char *const *)j->src, j->n, j->dst);
+    if (j->op == OP_DISK) j->rc = copy_volume(&c, j);
+    else if (j->op == OP_TRASH && is_engine_trash(&c, j->dst)) j->rc = of_delete(&c, (const char *const *)j->src, j->n);
+    else if (j->op == OP_MOVE || j->op == OP_TRASH) j->rc = of_move(&c, (const char *const *)j->src, j->n, j->dst);
     else j->rc = of_copy(&c, (const char *const *)j->src, j->n, j->dst);
+    if (j->rc == OF_ERR_IO && j->failed) j->rc = OF_OK;     /* of_delete's word for "some failed": said below */
     job_window_close(j);
     if (!stopping && j->rc != OF_ERR_CANCEL && (j->failed || j->rc != OF_OK)) {
         struct EasyStruct es;
         es.es_StructSize = sizeof es;
         es.es_Flags = 0;
-        es.es_Title = (UBYTE *)(j->move ? "Moving" : "Copying");
+        es.es_Title = (UBYTE *)"Workbench";
         es.es_GadgetFormat = (UBYTE *)"OK";
-        if (j->failed) {
+        if (j->failed == 1) {
+            es.es_TextFormat = (UBYTE *)"Error while %s \"%s\"\n%s";
+            EasyRequest(NULL, &es, NULL, (ULONG)(j->op == OP_COPY || j->op == OP_DISK ? "copying" : "moving"),
+                        (ULONG)of_path_name(j->first_failed), (ULONG)err_text(j->first_err));
+        } else if (j->failed) {
             es.es_TextFormat = (UBYTE *)"%ld could not be %s:\n%s:\n%s.";
-            EasyRequest(NULL, &es, NULL, (LONG)j->failed, (ULONG)(j->move ? "moved" : "copied"), (ULONG)j->first_failed,
+            EasyRequest(NULL, &es, NULL, (LONG)j->failed, (ULONG)op_done(j), (ULONG)j->first_failed,
                         (ULONG)err_text(j->first_err));
         } else {
             es.es_TextFormat = (UBYTE *)"Nothing could be %s to\n%s:\n%s.";
-            EasyRequest(NULL, &es, NULL, (ULONG)(j->move ? "moved" : "copied"), (ULONG)j->dst, (ULONG)err_text(j->rc));
+            EasyRequest(NULL, &es, NULL, (ULONG)op_done(j), (ULONG)j->dst, (ULONG)err_text(j->rc));
         }
     }
     Forbid();
@@ -452,13 +519,13 @@ static int job_run(job *j)
     return p != NULL;
 }
 
-/* A job for these sources, into dst. move: one volume. Drawers to read again: dst, and where each came from. */
-static int job_for(char **src, int n, const char *dst, int move, const char *volume)
+/* A job for these sources, into dst. Drawers to read again: dst, and where each came from when they go. */
+static int job_for(char **src, int n, const char *dst, int op, const char *volume)
 {
     job *j = AllocVec(sizeof *j, MEMF_PUBLIC | MEMF_CLEAR);
     int i;
     if (!j) return 0;
-    j->move = move;
+    j->op = op;
     of_strlcpy(j->dst, dst, OF_PATH_MAX);
     if (volume) of_strlcpy(j->volume, volume, OF_PATH_MAX);
     job_dir(j, dst);
@@ -468,7 +535,7 @@ static int job_for(char **src, int n, const char *dst, int move, const char *vol
         if (!(j->src[i] = AllocVec(strlen(src[i]) + 1, MEMF_ANY))) { job_free(j); return 0; }
         strcpy(j->src[i], src[i]);
         j->n = i + 1;
-        if (move && of_path_parent(parent, src[i])) job_dir(j, parent);
+        if (op != OP_COPY && of_path_parent(parent, src[i])) job_dir(j, parent);
     }
     if (!job_run(j)) { job_free(j); return 0; }
     return 1;
@@ -489,9 +556,38 @@ static int transfer(const char *const *paths, int n, const char *dst)
         if (same_volume(s, dst)) mv[nm++] = (char *)s;
         else cp[nc++] = (char *)s;
     }
-    if (nm) ok |= job_for(mv, nm, dst, 1, NULL);
-    if (nc) ok |= job_for(cp, nc, dst, 0, NULL);
+    if (nm) ok |= job_for(mv, nm, dst, OP_MOVE, NULL);
+    if (nc) ok |= job_for(cp, nc, dst, OP_COPY, NULL);
     FreeVec(mv);
+    return ok;
+}
+
+/* 1 when the drawer path is a trashcan: its icon is a trashcan's (WBGARBAGE), as Workbench knows one */
+static int is_trash(const char *path)
+{
+    struct DiskObject *o;
+    int t = 0;
+    if (!*of_path_name(path) || !(o = GetDiskObject((CONST_STRPTR)path))) return 0;
+    t = o->do_Type == WBGARBAGE;
+    FreeDiskObject(o);
+    return t;
+}
+
+/* Icons onto a trashcan: those on its volume go into it (OS 3.2.3's); from another volume nothing happens, as
+ * on 3.2.3. 1 when something was started. */
+static int to_trash(const char *const *paths, int n, const char *trash)
+{
+    char **tr, parent[OF_PATH_MAX];
+    int nt = 0, i, ok = 0;
+    if (n <= 0 || !(tr = AllocVec((ULONG)n * sizeof *tr, MEMF_ANY))) return 0;
+    for (i = 0; i < n; i++) {
+        const char *s = paths[i];
+        if (!*of_path_name(s) || of_path_inside(trash, s)) continue;    /* a disk, or the trashcan itself */
+        if (of_path_parent(parent, s) && of_path_equal(parent, trash)) continue;
+        if (same_volume(s, trash)) tr[nt++] = (char *)s;
+    }
+    if (nt) ok = job_for(tr, nt, trash, OP_TRASH, NULL);
+    FreeVec(tr);
     return ok;
 }
 
@@ -580,17 +676,21 @@ int ob_drop(const char *const *paths, int n, WORD sx, WORD sy, UWORD qual, wb_dr
     struct Window *w = ob_drop_window_at(sx, sy);
     wb_drawer *d;
     char dst[OF_PATH_MAX];
-    (void)qual;
+    (void)qual;                                 /* no qualifier changes a drop on OS 3.2.3 (measured) */
     if (!w || n <= 0 || stopping) return 0;
     if ((d = drawer_of(w))) {
         int at = wb_drawer_at(d, sx, sy, dst, sizeof dst);
         if (at == WB_AT_NONE || (d == from && at != WB_AT_DRAWER)) return 0;
         if (at == WB_AT_FILE) of_strlcpy(dst, wb_drawer_path(d), sizeof dst);   /* onto a tool: into its drawer */
+        if (at == WB_AT_DRAWER && is_trash(dst)) return to_trash(paths, n, dst);
         return transfer(paths, n, dst);
     }
     if (w == *env.root) {
-        if (env.volume_at && env.volume_at(sx, sy, dst, sizeof dst)) return transfer(paths, n, dst);
-        return 0;                               /* Leave Out: Phase B */
+        int k = env.icon_at ? env.icon_at(sx, sy, dst, sizeof dst) : OB_DESK_NONE;
+        if (k == OB_DESK_DISK || k == OB_DESK_DRAWER) return transfer(paths, n, dst);
+        if (k == OB_DESK_TRASH) return to_trash(paths, n, dst);
+        /* the desktop's own space (or a tool left out there): left out, for this run, as on 3.2.3 */
+        return from && env.leave_out ? env.leave_out(paths, n, sx, sy) : 0;
     }
     return appwindow_drop(w, paths, n, sx, sy);
 }
@@ -601,13 +701,19 @@ int ob_drop_volume(const char *volume, WORD sx, WORD sy, UWORD qual)
     wb_drawer *d;
     char dst[OF_PATH_MAX];
     (void)qual;
-    if (!w || w == *env.root || stopping) return 0;
+    if (!w || stopping) return 0;
+    if (w == *env.root) {
+        /* onto a drawer left out on the desktop (a disk's icon onto another disk's only moves it there) */
+        if (env.icon_at && env.icon_at(sx, sy, dst, sizeof dst) == OB_DESK_DRAWER && !of_path_inside(dst, volume))
+            return job_for(NULL, 0, dst, OP_DISK, volume);
+        return 0;
+    }
     if ((d = drawer_of(w))) {
         int at = wb_drawer_at(d, sx, sy, dst, sizeof dst);
         if (at == WB_AT_NONE) return 0;
         if (at == WB_AT_FILE) of_strlcpy(dst, wb_drawer_path(d), sizeof dst);
-        if (of_path_inside(dst, volume)) return 0;      /* a disk into a drawer on itself */
-        return job_for(NULL, 0, dst, 0, volume);
+        if (of_path_inside(dst, volume) || (at == WB_AT_DRAWER && is_trash(dst))) return 0;  /* a disk into itself */
+        return job_for(NULL, 0, dst, OP_DISK, volume);
     }
     return appwindow_drop(w, &volume, 1, sx, sy);
 }
@@ -643,13 +749,16 @@ ULONG ob_drop_sigmask(void)
 void ob_drop_handle(void)
 {
     struct Message *m;
+    int ended = 0;
     while (done_port && (m = GetMsg(done_port))) {
         job *j = (job *)m;
         int i;
         if (!stopping)
             for (i = 0; i < j->ndirs; i++) reread(j->dirs[i]);
         job_free(j);
+        ended = 1;
     }
+    if (ended && !stopping && env.changed) env.changed();   /* icons left out may have gone with their files */
     while (app_port && (m = GetMsg(app_port))) {
         app_free((struct AppMessage *)m);
         apps_out--;

@@ -56,6 +56,9 @@ und=$("$STOVE/prefix/bin/m68k-amigaos-nm" -u "$OUT/openbench.library" || true)
 [ -z "$und" ] || { echo "undefined in openbench.library: $und" >&2; exit 1; }
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/WorkbenchABITest" "$HERE/tests/amiga/WorkbenchABITest.c"
+# DragTest: a lab's mouse and keys from inside it, at exact places, for the drag and drop tests (OpenBench 0.1.35)
+# shellcheck disable=SC2086
+"$CC" $COMMON -o "$OUT/DragTest" "$HERE/tests/amiga/DragTest.c"
 # shellcheck disable=SC2086
 "$CC" $COMMON -o "$OUT/wbspy" "$HERE/tools/wbspy.c" "$HERE/tools/spyfmt.c"
 # r1swap: lets OS 3.2's own Workbench start under R1, for step L2 (lab only)
