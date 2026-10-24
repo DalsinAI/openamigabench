@@ -93,6 +93,7 @@
  *     the Clean Up order (name, kind, size or date); an icon let go of stays the user's for the run, snapped to the
  *     grid, and the others go round it; Disk.info places are no longer used; ENV:Sys/IconLayout and IconLabels
  *     (OpenPrefs' Icons page; labels close by default) followed at once, the drawers too (opengadtools wb_grid.c);
+ *     the desktop's labels light on a dark backdrop and dark on a light one, as the picture's .tone says;
  *
  * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -764,10 +765,39 @@ static void icon_extent(dicon *ic, LONG *x0, LONG *y0, LONG *x1, LONG *y1)
     *y1 = ly + label_h + 2;
 }
 
+/* 0.1.34: the desktop's labels in the colour the backdrop asks for (the background pack's lab, 24 October 2026: dark
+ * labels on the dark backdrops were hard to read). OpenUp's backdrops have a sidecar beside the picture,
+ * <picture>.tone, "dark" or "light" (OpenUpTool RECONCILE reads it for Font prefs' pens, which OpenBench doesn't
+ * draw with): on a dark picture the labels are light with a dark shadow, on a light one dark. With no .tone, no
+ * picture, or the Icons page's "The theme's" (ENV:Sys/IconLayout labelcolour=theme), the theme's icon.text as before.
+ * Read when the desktop comes up and when the root picture changes (ENV:Sys/WBPattern.prefs). */
+static int label_tone;                      /* 0 the theme's, 1 light on a dark picture, 2 dark on a light one */
+
+static void read_tone(void)
+{
+    char path[300], buf[16];
+    BPTR f;
+    LONG n;
+    int k;
+    label_tone = 0;
+    if (Lock_exists("ENV:OpenBench/NoPicture") || !root_picture(path, (int)sizeof path - 6)) return;
+    strcat(path, ".tone");
+    if (!(f = Open((CONST_STRPTR)path, MODE_OLDFILE))) return;
+    n = Read(f, buf, sizeof buf - 1);
+    Close(f);
+    buf[n > 0 ? n : 0] = 0;
+    for (k = 0; buf[k]; k++)
+        if (buf[k] >= 'A' && buf[k] <= 'Z') buf[k] += 32;
+    if (!strncmp(buf, "dark", 4)) label_tone = 1;
+    else if (!strncmp(buf, "light", 5)) label_tone = 2;
+}
+
 static void draw_icon(dicon *ic)
 {
+    static const ogt_rgb light = { 0xF4, 0xF4, 0xF4 }, shadow = { 0x10, 0x10, 0x14 }, dark = { 0x1A, 0x1A, 0x1E };
     struct RastPort *rp = root->RPort;
     LONG lx, ly, lw;
+    int tone = ip.tone ? label_tone : 0;
     if (!ic->dobj) return;
     DrawIconState(rp, ic->dobj, NULL, ic->ix, ic->iy, ic->selected ? IDS_SELECTED : IDS_NORMAL,
                   ICONDRAWA_Frameless, TRUE, ICONDRAWA_Borderless, TRUE, ICONDRAWA_EraseBackground, FALSE,
@@ -778,7 +808,12 @@ static void draw_icon(dicon *ic)
         int lead = ip.close ? ogt_font_lead(rp->Font) : 0;
         ogt_box(rp, ogt_pen(&ctx, "accent"), (int)lx - 5, (int)ly + lead - 1, (int)lw + 10, (int)label_h + 2 - lead);
         ogt_text(rp, ogt_pen(&ctx, "accent.text"), (int)lx, (int)ly, ic->name, (int)lw);
-    } else
+    } else if (tone == 1) {                 /* a dark backdrop: light, on a shadow a pixel down and right */
+        ogt_text(rp, ogt_pen_rgb(&ctx, shadow), (int)lx + 1, (int)ly + 1, ic->name, (int)lw);
+        ogt_text(rp, ogt_pen_rgb(&ctx, light), (int)lx, (int)ly, ic->name, (int)lw);
+    } else if (tone == 2)                   /* a light one: dark */
+        ogt_text(rp, ogt_pen_rgb(&ctx, dark), (int)lx, (int)ly, ic->name, (int)lw);
+    else
         ogt_text(rp, ogt_pen(&ctx, "icon.text"), (int)lx, (int)ly, ic->name, (int)lw);
 }
 
@@ -1962,6 +1997,7 @@ static void new_picture(void)
 {
     ULONG *grad;
     drop_picture();
+    read_tone();                                /* 0.1.34: the labels' colour from the new picture's .tone */
     grad = gradient_backdrop(bd_w, bd_h);
     LockLayer(0, root->WLayer);
     backdrop = grad;
@@ -2060,6 +2096,7 @@ static int desktop_up(void)
     if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(nm, TAG_DONE)) &&
         LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
         SetMenuStrip(root, menus);
+    read_tone();                                /* 0.1.34: the labels' colour from the picture's .tone */
     scan_volumes();
     draw_icons();
     titles_everywhere();
