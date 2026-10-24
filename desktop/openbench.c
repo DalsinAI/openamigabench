@@ -71,6 +71,10 @@
  *     button; a disk's icon dragged from the desktop into a drawer window has its contents copied; icons
  *     let go over a program's AppWindow reach it as an AppMessage, as from OS 3.2.3's Workbench
  *     (ob_drop.c; workbench.library takes AddAppWindowA while OpenBench says it delivers them).
+ *   - labels close to the image (0.1.30; the user's solid OS list, 24 October 2026): with icon.library's setting
+ *     on (ENV:Sys/IconLabels "close", OpenLook's Workbench tab) a desktop icon's label goes where icon.library
+ *     puts it, 2 rows under the lowest row of its picture that isn't empty, instead of OpenBench's own 4 under the
+ *     icon's whole box; when the setting changes the desktop's icons are read again;
  *
  * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -137,7 +141,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.29"
+#define OPENBENCH_VERSION "0.1.30"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -659,6 +663,7 @@ typedef struct dicon {
     struct DiskObject *dobj;
     LONG x, y, w, h;                        /* the picture's box in the root window */
     LONG ix, iy;                            /* where DrawIconState puts it for that box */
+    LONG lt;                                /* the label's text, from the box's top */
     int selected;
 } dicon;
 
@@ -671,6 +676,25 @@ static LONG label_h;
 #define COLUMN_X 24
 #define COLUMN_W 96
 
+/* 0.1.30: labels close to the image (icon.library's setting, ENV:Sys/IconLabels "close"; OpenLook's Workbench
+ * tab). icon.library then ends an icon's box on the row after its picture's lowest row with colour, and puts the
+ * label's box on the row after that: the label's text goes where icon.library says (GetIconRectangle with the
+ * label, in the labels' font), 2 rows under the picture. Without it, OpenBench's own LABEL_GAP under the box, as
+ * before. Read when the desktop's icons are read, as icon.library decides each icon's labels when it is read. */
+static int labels_close;
+
+static int icon_labels_close(void)
+{
+    char buf[16], *s = buf;
+    LONG n = GetVar((CONST_STRPTR)"Sys/IconLabels", (STRPTR)buf, sizeof buf, GVF_GLOBAL_ONLY);
+    int k;
+    if (n <= 0) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    for (k = 0; s[k] && s[k] != ' ' && s[k] != '\t' && s[k] != '\n' && s[k] != '\r'; k++)
+        if (s[k] >= 'A' && s[k] <= 'Z') s[k] += 32;
+    return (k == 5 && !strncmp(s, "close", 5)) || (k == 2 && !strncmp(s, "on", 2));
+}
+
 static void label_box(dicon *ic, LONG *lx, LONG *ly, LONG *lw)
 {
     struct RastPort *rp = root->RPort;
@@ -678,7 +702,7 @@ static void label_box(dicon *ic, LONG *lx, LONG *ly, LONG *lw)
     if (tw > max) tw = max;
     *lw = tw;
     *lx = ic->x + (ic->w - tw) / 2;
-    *ly = ic->y + ic->h + LABEL_GAP;
+    *ly = ic->y + ic->lt;
 }
 
 /* The box an icon covers with its label, for clearing. */
@@ -831,6 +855,7 @@ static void scan_volumes(void)
     LONG next_y = 12;
     int i;
     free_icons();
+    labels_close = icon_labels_close();
     dl = start = LockDosList(LDF_VOLUMES | LDF_DEVICES | LDF_READ);
     while ((dl = NextDosEntry(dl, LDF_VOLUMES)) && nicons < MAX_VOLUMES) {
         UBYTE *b = (UBYTE *)BADDR(dl->dol_Name);
@@ -862,6 +887,14 @@ static void scan_volumes(void)
             ic->w = r.MaxX - r.MinX + 1;
             ic->h = r.MaxY - r.MinY + 1;
         }
+        ic->lt = ic->h + LABEL_GAP;
+        if (labels_close && ic->dobj) {
+            struct Rectangle lr;
+            /* the label's box ends at MaxY and is the font's height and a row above and below it */
+            if (GetIconRectangle(root->RPort, ic->dobj, (STRPTR)ic->name, &lr, ICONDRAWA_Borderless, TRUE, TAG_DONE) &&
+                lr.MaxY - r.MinY - label_h > 0)
+                ic->lt = lr.MaxY - r.MinY - label_h;
+        }
         if (ic->dobj && ic->dobj->do_CurrentX != (LONG)NO_ICON_POSITION && ic->dobj->do_CurrentX >= 0 &&
             ic->dobj->do_CurrentY >= 0 && ic->dobj->do_CurrentX < root->Width - 16 && ic->dobj->do_CurrentY < root->Height - 16) {
             ic->x = ic->dobj->do_CurrentX;
@@ -870,7 +903,7 @@ static void scan_volumes(void)
             ic->x = COLUMN_X + (COLUMN_W - ic->w) / 2;
             ic->y = next_y;
         }
-        if (ic->y + ic->h + label_h + 24 > next_y) next_y = ic->y + ic->h + label_h + 24;
+        if (ic->y + ic->lt + label_h + 20 > next_y) next_y = ic->y + ic->lt + label_h + 20;
         ic->ix = ic->x - r.MinX;
         ic->iy = ic->y - r.MinY;
     }
@@ -2264,10 +2297,11 @@ static void aloha_stop(void)
     if (reset_sig >= 0) { FreeSignal(reset_sig); reset_sig = -1; }
 }
 
-/* ENV:Sys's two files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns. */
-static struct NotifyRequest wbp_nr, pat_nr;
-static BYTE wbp_sig = -1, pat_sig = -1;
-static int wbp_notify, pat_notify;
+/* ENV:Sys's files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns; and (0.1.30)
+ * icon.library's labels close to the image. */
+static struct NotifyRequest wbp_nr, pat_nr, lbl_nr;
+static BYTE wbp_sig = -1, pat_sig = -1, lbl_sig = -1;
+static int wbp_notify, pat_notify, lbl_notify;
 
 static int notify_on(struct NotifyRequest *nr, const char *name, BYTE sig)
 {
@@ -2341,6 +2375,8 @@ static int run(void)
     pat_sig = AllocSignal(-1);
     wbp_notify = notify_on(&wbp_nr, "ENV:Sys/Workbench.prefs", wbp_sig);
     pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", pat_sig);
+    lbl_sig = AllocSignal(-1);
+    lbl_notify = notify_on(&lbl_nr, "ENV:Sys/IconLabels", lbl_sig);
     wbc_start();                                   /* OpenLook's close notice */
     ob_drop_start(&drop_env);                      /* 0.1.26: before the dock and WBStartup add AppWindows */
     start_dock();
@@ -2360,7 +2396,8 @@ static int run(void)
     for (;;) {
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
                           (1UL << pub->mp_SigBit) |
-                          (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) | wbc_sigmask() |
+                          (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) |
+                          (lbl_sig >= 0 ? 1UL << lbl_sig : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
                           ob_drop_sigmask() | SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
@@ -2439,6 +2476,13 @@ static int run(void)
             }
         }
         if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
+        if (lbl_sig >= 0 && (sigs & (1UL << lbl_sig)) && root) {
+            /* labels close to the image, or not: the desktop's icons read again, once icon.library (which reads
+             * its setting at most once a second) has the new one; drawers follow when they are opened again */
+            Delay(60);
+            scan_volumes();
+            redraw_all();
+        }
         if ((sigs & wb_thumb_sigmask()) && wb_thumb_collect())
             for (i = 0; i < ndrawers; i++) wb_drawer_thumbs(drawers[i]);
         if (sigs & (1UL << picture_sig)) {
@@ -2505,9 +2549,11 @@ out:
     if (tport) DeleteMsgPort(tport);
     if (wbp_notify) EndNotify(&wbp_nr);
     if (pat_notify) EndNotify(&pat_nr);
-    wbp_notify = pat_notify = 0;
+    if (lbl_notify) EndNotify(&lbl_nr);
+    wbp_notify = pat_notify = lbl_notify = 0;
     if (wbp_sig >= 0) { FreeSignal(wbp_sig); wbp_sig = -1; }
     if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
+    if (lbl_sig >= 0) { FreeSignal(lbl_sig); lbl_sig = -1; }
     desktop_down();                             /* the Information windows, the drawers, the root, the screen */
     wbc_stop();
     wb_thumb_stop();                            /* its process runs our code, and uses datatypes.library */
