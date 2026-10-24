@@ -1027,8 +1027,12 @@ static void scan_volumes(void)
         for (i = 0; i < nicons; i++) {
             static struct InfoData id __attribute__((aligned(4)));
             char vp[72];
+            size_t n = strlen(icons[i].name);
             BPTR l;
-            snprintf(vp, sizeof vp, "%s:", icons[i].name);
+            if (n > 63) n = 63;
+            memcpy(vp, icons[i].name, n);
+            vp[n] = ':';
+            vp[n + 1] = 0;
             if ((l = Lock((CONST_STRPTR)vp, SHARED_LOCK))) {
                 if (Info(l, &id)) icons[i].kb = (ULONG)id.id_NumBlocks * (ULONG)(id.id_BytesPerBlock >> 9) / 2;
                 UnLock(l);
