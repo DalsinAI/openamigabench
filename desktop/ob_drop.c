@@ -179,7 +179,10 @@ typedef struct job {
     struct DrawInfo *dri;
     ULONG t0s, t0m, ts, tm;                     /* when it began; when the window was last drawn */
     int tried, stopped, failed, first_err, rc;
+    int answered;                               /* the user said Cancel to a full or write-protected disk */
     char first_failed[OF_PATH_MAX];
+    char into[OF_PATH_MAX];                     /* a disk's contents: the drawer made for them (OP_DISK) */
+    struct of_fs *fs;                           /* the job's file system, for a file tried again */
 } job;
 
 static const char *op_doing(const job *j)
@@ -360,15 +363,101 @@ static int job_ask(void *user, const of_clash *c)
     }
 }
 
+/* The drawer in the job's destination that the file path (one the engine was copying) goes into: its drawer's place
+ * under the source's drawer, under the destination. 0 when path isn't one of the job's sources' (a drawer the engine
+ * was making, say). */
+static int dest_dir_of(const job *j, const char *path, char *out)
+{
+    char base[OF_PATH_MAX], par[OF_PATH_MAX];
+    const char *to = j->op == OP_DISK ? j->into : j->dst, *rel;
+    size_t n;
+    int i;
+    if (!of_path_parent(par, path)) return 0;
+    if (j->op == OP_DISK) of_strlcpy(base, j->volume, OF_PATH_MAX);
+    else {
+        for (i = 0; i < j->n && !of_path_inside(path, j->src[i]); i++) ;
+        if (i == j->n || !of_path_parent(base, j->src[i])) return 0;
+    }
+    if (of_path_equal(par, base)) {
+        of_strlcpy(out, to, OF_PATH_MAX);
+        return 1;
+    }
+    n = strlen(base);
+    if (strlen(par) <= n) return 0;
+    for (i = 0; i < (int)n; i++) {
+        char a = par[i], b = base[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (b >= 'A' && b <= 'Z') b += 32;
+        if (a != b) return 0;
+    }
+    rel = par + n;
+    if (*rel == '/') rel++;
+    return *rel && of_path_join(out, to, rel);
+}
+
+static void retry_report(void *user, const char *path, int err)
+{
+    (void)path;
+    *(int *)user = err;
+}
+
+/* The name of the volume dst is on, for the question ("DnDRad"); dst's own volume part when it can't be locked */
+static void volume_name(const char *dst, char *out, int size)
+{
+    BPTR l = Lock((CONST_STRPTR)dst, ACCESS_READ);
+    char *c;
+    if (!l || !NameFromLock(l, (STRPTR)out, size)) of_strlcpy(out, dst, size);
+    if (l) UnLock(l);
+    if ((c = strchr(out, ':'))) *c = 0;
+}
+
+/* A file that couldn't be written because its disk is full or write-protected: asked about in the job's own
+ * requester, Retry or Cancel, as OS 3.2.3's DOS asks (its words: "Volume DnDRad is full"), so room can be made, or
+ * the disk unprotected, and the copy goes on (the user, 9 October 2026: "yes to full disk behavour"; the design's
+ * 5.11: only this job waits). The file the engine gave up on (its temporary copy already taken away) is copied
+ * again into its drawer on Retry, its icon with it. 1 when it went at last; 0 on Cancel (the rest of the job isn't
+ * tried, as 3.2.3 stops its copy there). The Team's own file systems don't ask, and the job's process lets no file
+ * system ask (pr_WindowPtr -1), so the question is asked once, here, whatever the disk. */
+static int retry_write(job *j, const char *path, int err)
+{
+    char dir[OF_PATH_MAX], vol[64];
+    struct EasyStruct es;
+    of_ctx c2;
+    int got;
+    if (j->op != OP_COPY && j->op != OP_DISK) return 0;
+    volume_name(j->op == OP_DISK ? j->into : j->dst, vol, sizeof vol);
+    for (;;) {
+        es.es_StructSize = sizeof es;
+        es.es_Flags = 0;
+        es.es_Title = (UBYTE *)"System Request";
+        es.es_TextFormat = (UBYTE *)(err == OF_ERR_FULL ? "Volume\n%s\nis full" : "Volume\n%s\nis write protected");
+        es.es_GadgetFormat = (UBYTE *)"Retry|Cancel";
+        if (!EasyRequest(j->win, &es, NULL, (ULONG)vol)) return 0;
+        if (!dest_dir_of(j, path, dir)) return 0;
+        of_ctx_init(&c2, j->fs);
+        got = OF_OK;
+        c2.user = &got;
+        c2.ask = NULL;
+        c2.clash = OF_CLASH_REPLACE;            /* its own temporary copy was taken away: nothing of it is there */
+        c2.report = retry_report;
+        if (of_copy(&c2, &path, 1, dir) == OF_OK && got == OF_OK) return 1;
+        if (got != OF_ERR_FULL && got != OF_ERR_READONLY) return 0;
+        err = got;
+    }
+}
+
 static void job_report(void *user, const char *path, int err)
 {
     job *j = user;
+    if ((err == OF_ERR_FULL || err == OF_ERR_READONLY) && !j->stopped && !stopping) {
+        if (retry_write(j, path, err)) return;
+        j->answered = 1;
+    }
     if (!j->failed++) {
         of_strlcpy(j->first_failed, path, OF_PATH_MAX);
         j->first_err = err;
     }
-    /* a full or write-protected disk: DOS has asked already, Retry or Cancel (room can be made meanwhile), and
-     * this is the Cancel; the rest isn't tried, as 3.2.3 stops its copy there */
+    /* a full or write-protected disk the user didn't make room on: the rest isn't tried, as 3.2.3 stops its copy */
     if (err == OF_ERR_FULL || err == OF_ERR_READONLY) j->stopped = 1;
 }
 
@@ -425,6 +514,7 @@ static int copy_volume(of_ctx *c, job *j)
         if (c->fs->stat(c->fs, into, &st) != OF_OK || st.type == OF_NONE) break;
     }
     if ((rc = of_mkdir(c, into)) != OF_OK) return rc;
+    of_strlcpy(j->into, into, OF_PATH_MAX);
     c->fs->list(c->fs, j->volume, name_add, &l);
     if (!(src = AllocVec((ULONG)(l.n + 1) * sizeof *src, MEMF_ANY | MEMF_CLEAR))) rc = OF_ERR_NOMEM;
     for (i = 0; rc == OF_OK && i < l.n; i++) {
@@ -517,6 +607,9 @@ static void job_entry(void)
     c.ask = job_ask;
     c.progress = job_progress;
     c.report = job_report;
+    j->fs = &fs;
+    /* no file system asks in this process: a full or write-protected disk is asked about by the job (retry_write) */
+    ((struct Process *)FindTask(NULL))->pr_WindowPtr = (APTR)-1;
     CurrentTime(&j->t0s, &j->t0m);
     if (j->op == OP_DISK) j->rc = copy_volume(&c, j);
     else if (j->op == OP_TRASH && is_engine_trash(&c, j->dst)) j->rc = of_delete(&c, (const char *const *)j->src, j->n);
@@ -525,7 +618,9 @@ static void job_entry(void)
     if (j->rc == OF_ERR_IO && j->failed) j->rc = OF_OK;     /* of_delete's word for "some failed": said below */
     if ((j->op == OP_COPY || j->op == OP_MOVE) && (j->stopped || stopping || j->rc == OF_ERR_CANCEL)) stopped_icons(j);
     job_window_close(j);
-    if (!stopping && j->rc != OF_ERR_CANCEL && (j->failed || j->rc != OF_OK)) {
+    /* the summary, unless the user stopped it, or said Cancel to a full or write-protected disk (3.2.3 says no more
+     * then either: its screen title has the error) */
+    if (!stopping && !j->answered && j->rc != OF_ERR_CANCEL && (j->failed || j->rc != OF_OK)) {
         struct EasyStruct es;
         es.es_StructSize = sizeof es;
         es.es_Flags = 0;
