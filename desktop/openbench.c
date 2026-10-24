@@ -543,6 +543,8 @@ static int device_hidden(const UBYTE *b)
 static struct Task *main_task;
 static BYTE picture_sig = -1;
 static volatile int picture_busy;
+static struct Process *picture_proc;        /* 0.1.34: the picture's process while it decodes, and its ticks */
+static int picture_ticks;
 static char picture_path[256];
 static struct Screen *picture_scr;
 
@@ -1967,8 +1969,9 @@ static void start_picture(void)
         return;
     picture_scr = look.scr;
     picture_busy = 1;
-    if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
-                           NP_Priority, -1, TAG_DONE))
+    picture_ticks = 0;
+    if (!(picture_proc = CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384,
+                                           NP_Name, (ULONG)"OpenBench backdrop", NP_Priority, -1, TAG_DONE)))
         picture_busy = 0;
 }
 
@@ -2637,6 +2640,13 @@ static int run(void)
         }
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
+            /* 0.1.34: the picture decodes at -1, under everything else; still busy two ticks on (4 seconds), at 0, so a
+             * program that never waits at 0 can't hold it back for ever (lab t4-desk, 24 October 2026: a backdrop chosen
+             * while OpenBench ran never came, its process ready at -1 behind a Shell's command at 0) */
+            Forbid();
+            if (picture_busy && picture_proc && ++picture_ticks == 2) SetTaskPri(&picture_proc->pr_Task, 0);
+            if (!picture_busy) picture_proc = NULL;
+            Permit();
             if (root && make_title()) titles_everywhere();
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
