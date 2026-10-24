@@ -84,6 +84,10 @@
  *     no file runs the resident of its name (OpenMonitor's icon, the ROM's OpenMonitor), a user one first, then
  *     a system one, while a disk file of that name still wins (resident_tool); a project's default tool is
  *     looked for in SYS:Preferences too, OpenPrefs's drawer; SYS:Prefs's window no longer lists ROM:Prefs;
+ *   - the desktop's grid (0.1.33; the user's solid OS list, 24 October 2026): every desktop icon in a cell of one
+ *     grid measured on the icons' boxes and their labels in the labels' font, so a label never runs into the
+ *     icon under it; a Disk.info's place is kept as the cell nearest it; an icon let go of on the desktop goes
+ *     to the free cell nearest; Icons > Clean Up puts them all down the left in name order (place_icons);
  *
  * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -150,7 +154,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.32"
+#define OPENBENCH_VERSION "0.1.33"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -678,6 +682,8 @@ typedef struct dicon {
     LONG x, y, w, h;                        /* the picture's box in the root window */
     LONG ix, iy;                            /* where DrawIconState puts it for that box */
     LONG lt;                                /* the label's text, from the box's top */
+    LONG sx, sy;                            /* 0.1.33: where its Disk.info puts it; sx NO_ICON_POSITION: nowhere */
+    WORD col, row;                          /* 0.1.33: its place on the desktop's grid; col -1: none yet */
     int selected;
 } dicon;
 
@@ -687,8 +693,39 @@ static struct DrawInfo *dri;
 static LONG label_h;
 
 #define LABEL_GAP 4
-#define COLUMN_X 24
-#define COLUMN_W 96
+
+/* 0.1.33: the desktop's grid (the user's solid OS list, 24 October 2026: "the icons still have a grid layout
+ * problem"). 0.1.32 put an icon where its Disk.info said and the others down the left, 96 apart across and the
+ * height of the label below that, without looking at the icons it had put where their Disk.info said: on a
+ * 1920x1200 screen, with the icons fitted to 64 and their labels in CGTriumvirate 23, the RAM disk's label lay on
+ * System's picture and System's on Work's, where a Disk.info made for OS 3.2.3's own smaller icons put them 71
+ * apart; and an icon put down the left was centred on another line than one put by its Disk.info.
+ * Now every icon has a cell of one grid. The cell is measured on the icons it holds: as wide as the widest
+ * picture's box or the widest label (as wide as it is in the labels' font, up to label_max) and its box, and as
+ * high as the tallest picture's box and its label (in that font, where icon.library puts it with labels close),
+ * then a gap, the larger the larger the labels' font. A picture stands on its cell's line at the cell's middle, and
+ * its label is centred under it, so a column's pictures and labels share one middle. Where an icon goes: where it
+ * was put before in this run (dragged, Clean Up, or read before), else the cell nearest its Disk.info's place,
+ * pushing the next one down when two want the same cell (the user's own order kept), else the first free cell down
+ * the left. Let go of on the desktop, an icon goes to the free cell nearest. Icons > Clean Up puts them all down
+ * the left in name order. Positions are kept by name for the run, not written to the Disk.info: OpenBench has no
+ * Snapshot yet. */
+#define GRID_X 16                           /* the grid's first cell, from the root window's corner */
+#define GRID_Y 12
+static LONG cell_w, cell_h;                 /* the grid's step across and down */
+static LONG cell_in;                        /* a cell's width without its gap: the pictures and labels are centred in it */
+static LONG box_h_max;                      /* the tallest picture's box: every picture stands on its line */
+static LONG label_max = 112;                /* a label's widest; a longer one ends in "..." */
+static int grid_cols, grid_rows;
+
+/* Where an icon was put in this run, by its volume's name: kept while its disk is out, so it comes back there. */
+typedef struct dplace {
+    char name[64];
+    WORD col, row;
+} dplace;
+#define MAX_PLACES (2 * MAX_VOLUMES)
+static dplace places[MAX_PLACES];
+static int nplaces;
 
 /* 0.1.30: labels close to the image (icon.library's setting, ENV:Sys/IconLabels "close"; OpenLook's Workbench
  * tab). icon.library then ends an icon's box on the row after its picture's lowest row with colour, and puts the
@@ -712,8 +749,8 @@ static int icon_labels_close(void)
 static void label_box(dicon *ic, LONG *lx, LONG *ly, LONG *lw)
 {
     struct RastPort *rp = root->RPort;
-    LONG tw = ogt_text_width(rp, ic->name), max = COLUMN_W + 16;
-    if (tw > max) tw = max;
+    LONG tw = ogt_text_width(rp, ic->name);
+    if (tw > label_max) tw = label_max;
     *lw = tw;
     *lx = ic->x + (ic->w - tw) / 2;
     *ly = ic->y + ic->lt;
@@ -793,6 +830,180 @@ static void move_icon(dicon *ic, LONG nx, LONG ny)
     draw_icon(ic);
 }
 
+/* ---- the desktop's grid (0.1.33) ----------------------------------------------------------------- */
+
+static dplace *place_of(const char *name)
+{
+    int i;
+    for (i = 0; i < nplaces; i++)
+        if (!strcmp(places[i].name, name)) return &places[i];
+    return NULL;
+}
+
+static void remember(const dicon *ic)
+{
+    dplace *p = place_of(ic->name);
+    if (ic->col < 0) return;
+    if (!p) {
+        if (nplaces == MAX_PLACES) {                /* full: the one kept longest goes */
+            memmove(&places[0], &places[1], (MAX_PLACES - 1) * sizeof places[0]);
+            nplaces--;
+        }
+        p = &places[nplaces++];
+        snprintf(p->name, sizeof p->name, "%s", ic->name);
+    }
+    p->col = ic->col;
+    p->row = ic->row;
+}
+
+/* The cells, measured on the icons read and their labels in the root window's font (the labels' font). */
+static void grid_measure(void)
+{
+    struct RastPort *rp = root->RPort;
+    LONG maxw = 0, lw = 0, below = 0, em = ogt_text_width(rp, "n"), gx, gy;
+    int i;
+    box_h_max = 0;
+    for (i = 0; i < nicons; i++) {
+        if (icons[i].w > maxw) maxw = icons[i].w;
+        if (icons[i].h > box_h_max) box_h_max = icons[i].h;
+    }
+    if (em < 4) em = 4;
+    label_max = 2 * maxw > 14 * em ? 2 * maxw : 14 * em;
+    for (i = 0; i < nicons; i++) {
+        LONG t = ogt_text_width(rp, icons[i].name), b;
+        if (t > label_max) t = label_max;
+        if (t > lw) lw = t;
+        /* the label's box ends 2 rows under its text (icon_extent) */
+        b = box_h_max - icons[i].h + icons[i].lt + label_h + 2;
+        if (b > below) below = b;
+    }
+    gx = label_h > 16 ? label_h : 16;
+    gy = label_h / 2 > 8 ? label_h / 2 : 8;
+    cell_in = maxw > lw + 10 ? maxw : lw + 10;     /* a selected label's box is 5 wider each side */
+    cell_w = cell_in + gx;
+    cell_h = below + 1 + gy;
+    grid_cols = (int)((root->Width - GRID_X) / cell_w);
+    grid_rows = (int)((root->Height - GRID_Y) / cell_h);
+    if (grid_cols < 1) grid_cols = 1;
+    if (grid_rows < 1) grid_rows = 1;
+}
+
+/* Where an icon's box goes in a cell: at its middle, standing on the line of the tallest. */
+static void cell_xy(const dicon *ic, int col, int row, LONG *x, LONG *y)
+{
+    *x = GRID_X + col * cell_w + (cell_in - ic->w) / 2;
+    *y = GRID_Y + row * cell_h + box_h_max - ic->h;
+}
+
+static void put_in(dicon *ic, int col, int row)
+{
+    LONG x, y;
+    cell_xy(ic, col, row, &x, &y);
+    ic->ix += x - ic->x;
+    ic->iy += y - ic->y;
+    ic->x = x;
+    ic->y = y;
+    ic->col = (WORD)col;
+    ic->row = (WORD)row;
+}
+
+static int cell_taken(int col, int row, const dicon *but)
+{
+    int i;
+    for (i = 0; i < nicons; i++)
+        if (&icons[i] != but && icons[i].col == col && icons[i].row == row) return 1;
+    return 0;
+}
+
+/* The cell nearest an icon's box at x, y. */
+static void cell_near(const dicon *ic, LONG x, LONG y, int *col, int *row)
+{
+    LONG cx = x + ic->w / 2 - GRID_X - cell_in / 2, cy = y - (box_h_max - ic->h) - GRID_Y;
+    int c = cx < 0 ? 0 : (int)((cx + cell_w / 2) / cell_w), r = cy < 0 ? 0 : (int)((cy + cell_h / 2) / cell_h);
+    *col = c < grid_cols ? c : grid_cols - 1;
+    *row = r < grid_rows ? r : grid_rows - 1;
+}
+
+/* The first free cell from col, row on: down its column, then down the next ones, round to the first. 0 when
+ * every cell is taken. */
+static int free_from(int col, int row, int *oc, int *orow)
+{
+    int n = grid_cols * grid_rows, k, s = col * grid_rows + row;
+    for (k = 0; k < n; k++) {
+        int t = (s + k) % n;
+        if (!cell_taken(t / grid_rows, t % grid_rows, NULL)) {
+            *oc = t / grid_rows;
+            *orow = t % grid_rows;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Every icon read in a cell (above). clean: Icons > Clean Up, all of them down the left in name order. */
+static void place_icons(int clean)
+{
+    int i, k, n = 0, c, r, order[MAX_VOLUMES];
+    grid_measure();
+    for (i = 0; i < nicons; i++) icons[i].col = icons[i].row = -1;
+    if (clean) nplaces = 0;
+    else {
+        for (i = 0; i < nicons; i++) {              /* where they were in this run */
+            dplace *p = place_of(icons[i].name);
+            if (p && free_from(p->col < grid_cols ? p->col : grid_cols - 1, p->row < grid_rows ? p->row : grid_rows - 1, &c, &r))
+                put_in(&icons[i], c, r);
+        }
+        for (i = 0; i < nicons; i++)                /* where their Disk.info says, from the top */
+            if (icons[i].col < 0 && icons[i].sx != (LONG)NO_ICON_POSITION) {
+                for (k = n; k > 0 && (icons[order[k - 1]].sy > icons[i].sy ||
+                                      (icons[order[k - 1]].sy == icons[i].sy && icons[order[k - 1]].sx > icons[i].sx)); k--)
+                    order[k] = order[k - 1];
+                order[k] = i;
+                n++;
+            }
+        for (k = 0; k < n; k++) {
+            dicon *ic = &icons[order[k]];
+            cell_near(ic, ic->sx, ic->sy, &c, &r);
+            if (free_from(c, r, &c, &r)) put_in(ic, c, r);
+        }
+    }
+    for (i = 0; i < nicons; i++)                    /* the rest down the left, in name order */
+        if (icons[i].col < 0) {
+            if (!free_from(0, 0, &c, &r)) c = r = 0;    /* more icons than cells: on the first */
+            put_in(&icons[i], c, r);
+        }
+    for (i = 0; i < nicons; i++) remember(&icons[i]);
+}
+
+/* An icon let go of on the desktop: into the free cell nearest where it was let go of. */
+static void drop_in_cell(dicon *ic)
+{
+    int c, r, bc = ic->col, br = ic->row, x, y;
+    LONG best = -1;
+    cell_near(ic, ic->x, ic->y, &c, &r);
+    if (!cell_taken(c, r, ic)) {
+        bc = c;
+        br = r;
+    } else
+        for (x = 0; x < grid_cols; x++)
+            for (y = 0; y < grid_rows; y++) {
+                LONG dx = (x - c) * cell_w, dy = (y - r) * cell_h, d2 = dx * dx + dy * dy;
+                if ((best < 0 || d2 < best) && !cell_taken(x, y, ic)) {
+                    best = d2;
+                    bc = x;
+                    br = y;
+                }
+            }
+    if (bc >= 0) {
+        LONG nx, ny;
+        cell_xy(ic, bc, br, &nx, &ny);
+        ic->col = (WORD)bc;
+        ic->row = (WORD)br;
+        if (nx != ic->x || ny != ic->y) move_icon(ic, nx, ny);
+        remember(ic);
+    }
+}
+
 static void free_icons(void)
 {
     int i;
@@ -866,7 +1077,6 @@ static int volume_hidden(struct DosList *start, const struct DosList *vol)
 static void scan_volumes(void)
 {
     struct DosList *dl, *start;
-    LONG next_y = 12;
     int i;
     free_icons();
     labels_close = icon_labels_close();
@@ -909,18 +1119,18 @@ static void scan_volumes(void)
                 lr.MaxY - r.MinY - label_h > 0)
                 ic->lt = lr.MaxY - r.MinY - label_h;
         }
+        ic->sx = (LONG)NO_ICON_POSITION;
+        ic->sy = 0;
         if (ic->dobj && ic->dobj->do_CurrentX != (LONG)NO_ICON_POSITION && ic->dobj->do_CurrentX >= 0 &&
             ic->dobj->do_CurrentY >= 0 && ic->dobj->do_CurrentX < root->Width - 16 && ic->dobj->do_CurrentY < root->Height - 16) {
-            ic->x = ic->dobj->do_CurrentX;
-            ic->y = ic->dobj->do_CurrentY;
-        } else {
-            ic->x = COLUMN_X + (COLUMN_W - ic->w) / 2;
-            ic->y = next_y;
+            ic->sx = ic->dobj->do_CurrentX;
+            ic->sy = ic->dobj->do_CurrentY;
         }
-        if (ic->y + ic->lt + label_h + 20 > next_y) next_y = ic->y + ic->lt + label_h + 20;
-        ic->ix = ic->x - r.MinX;
-        ic->iy = ic->y - r.MinY;
+        ic->x = ic->y = 0;                          /* put in its cell by place_icons */
+        ic->ix = -r.MinX;
+        ic->iy = -r.MinY;
     }
+    place_icons(0);
 }
 
 static dicon *icon_at(LONG x, LONG y)
@@ -1360,7 +1570,7 @@ static void titles_everywhere(void)
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
-       M_RESIZE };
+       M_RESIZE, M_CLEANUP };
 
 /* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
@@ -1380,6 +1590,8 @@ static struct NewMenu newmenus[] = {
     { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
     { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Clean Up", (STRPTR)".", 0, 0, (APTR)M_CLEANUP },    /* 0.1.33: the desktop's icons on its grid */
     /* the floppy drives from the desktop (Dale, 12 Oct 2026: "attach an adf to df0 so it can be booted"):
      * amigachrome-guest's InsertDisk window and ACDisk, through accontrol.device */
     { NM_TITLE, (STRPTR)"Disks", NULL, 0, 0, NULL },
@@ -1635,7 +1847,8 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 if (w && w != root) {
                     if (dragging->x != drag_ox || dragging->y != drag_oy) move_icon(dragging, drag_ox, drag_oy);
                     ob_drop_volume(dragging->path, sx, sy, qual);
-                }
+                } else
+                    drop_in_cell(dragging);         /* 0.1.33: on the desktop's grid */
                 dragging = NULL;
                 draw_icons();
             }
@@ -1700,6 +1913,10 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                 break;
             }
             case M_REDRAW: redraw_all(); break;
+            case M_CLEANUP:
+                place_icons(1);
+                redraw_all();
+                break;
             case M_RESIZE: want_resize = 1; break;   /* not here: it closes the menus being read */
             case M_UPDATE:
                 scan_volumes();
