@@ -45,6 +45,9 @@
  * whichever of its two colours stands out more from what is under it: white over the bar's light grey track,
  * where a fill ended under a number, was hard to read. A change of Font prefs is followed as one of the look.
  *
+ * 0.2.6: Font prefs' font is opened through opengadtools' ogt_open_icon_font (openfont.library, else
+ * diskfont.library), as OpenBench 0.1.31 opens it for its icon labels: one reader for both.
+ *
  * Video RAM: openrtg.library does not yet say how much of the card's memory is in use, so that bar shows the
  * card's video RAM (the AutoConfig board's size, AmigaChrome Team $DA15 product 9 or 15) with no fill.
  *
@@ -80,7 +83,6 @@
 #include <proto/expansion.h>
 #include <proto/gadtools.h>
 #include <proto/cybergraphics.h>
-#include <proto/diskfont.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -88,12 +90,12 @@
 #include "ogt_font.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.5"
+#define OPENMETERS_VERSION "0.2.6"
 static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;
-struct Library *UtilityBase, *IconBase, *GadToolsBase, *CyberGfxBase, *DiskfontBase;
+struct Library *UtilityBase, *IconBase, *GadToolsBase, *CyberGfxBase;
 struct ExpansionBase *ExpansionBase;
 
 #define MAX_ROWS 24
@@ -527,35 +529,13 @@ static colour theme_colour(const char *key, ULONG light, ULONG dark)
 /* 0.2.5: the icons' font (the user's solid OS list, 24 October 2026). Font prefs' Workbench icon text font at its
  * size, from ENV:Sys/font.prefs (a FONT chunk of type FP_WBFONT; the file is the OS's, IFF PREF); with none set,
  * the font OpenBench draws its icon labels in: the theme's, through opengadtools' ogt_open_font, as
- * desktop/openbench.c opens it (Team 3's measurement, 22 October 2026: the screen's font, which the open ROM
+ * desktop/openbench.c opens it. Font prefs' font is opened through opengadtools' ogt_open_icon_font, as OpenBench
+ * 0.1.31 opens it for its labels (Team 3's measurement, 22 October 2026: the screen's font, which the open ROM
  * sizes to a tall screen's bar, was CGTriumvirate 21 on Instance-32, its capitals 13 pixels against the labels'
  * 9). The screen's font only when neither opens. Called with the look read. */
 static struct TextFont *icon_font(void)
 {
-    LONG n, i;
-    UBYTE *t = (UBYTE *)read_file_n(FONT_ENV, &n);
-    struct TextFont *f = NULL;
-    if (t && n >= 12 && !memcmp(t, "FORM", 4) && !memcmp(t + 8, "PREF", 4)) {
-        for (i = 12; i + 8 <= n;) {
-            ULONG sz = (ULONG)t[i + 4] << 24 | (ULONG)t[i + 5] << 16 | (ULONG)t[i + 6] << 8 | t[i + 7];
-            if (sz > (ULONG)(n - i - 8)) break;
-            if (!memcmp(t + i, "FONT", 4) && sz >= sizeof(struct FontPrefs)) {
-                const struct FontPrefs *fp = (const struct FontPrefs *)(t + i + 8);     /* i is even: aligned */
-                if (fp->fp_Type == FP_WBFONT && fp->fp_Name[0] && fp->fp_TextAttr.ta_YSize > 0) {
-                    strncpy(font_name, (const char *)fp->fp_Name, sizeof font_name - 1);
-                    font_name[sizeof font_name - 1] = 0;
-                    font_ta.ta_Name = (STRPTR)font_name;
-                    font_ta.ta_YSize = fp->fp_TextAttr.ta_YSize;
-                    font_ta.ta_Style = fp->fp_TextAttr.ta_Style;
-                    font_ta.ta_Flags = fp->fp_TextAttr.ta_Flags;
-                    f = DiskfontBase ? OpenDiskFont(&font_ta) : OpenFont(&font_ta);
-                    break;
-                }
-            }
-            i += 8 + sz + (sz & 1);
-        }
-    }
-    if (t) FreeVec(t);
+    struct TextFont *f = ogt_open_icon_font(&font_ta, font_name, sizeof font_name);   /* opengadtools, as OpenBench */
     if (!f) f = ogt_open_font(theme_ok ? &theme : NULL, scr, &font_ta);
     if (!f) f = OpenFont(scr->Font);
     return f;
@@ -1234,7 +1214,6 @@ int main(int argc, char **argv)
     GadToolsBase = OpenLibrary((STRPTR)"gadtools.library", 39);
     IconBase = OpenLibrary((STRPTR)"icon.library", 39);
     CyberGfxBase = OpenLibrary((STRPTR)"cybergraphics.library", 41);   /* the panel mixed with the desktop on a card */
-    DiskfontBase = OpenLibrary((STRPTR)"diskfont.library", 36);         /* Font prefs' icon font, from disk */
     if (!IntuitionBase || !GfxBase || !UtilityBase || !GadToolsBase) goto done;
     place_read();
     if (wbs) tooltypes(wbs);
@@ -1265,7 +1244,6 @@ int main(int argc, char **argv)
 done:
     if (rda) FreeArgs(rda);
     if (CyberGfxBase) CloseLibrary(CyberGfxBase);
-    if (DiskfontBase) CloseLibrary(DiskfontBase);
     if (IconBase) CloseLibrary(IconBase);
     if (GadToolsBase) CloseLibrary(GadToolsBase);
     if (UtilityBase) CloseLibrary(UtilityBase);
