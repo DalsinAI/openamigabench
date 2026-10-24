@@ -23,8 +23,8 @@
  *   - Information (0.1.13, ob_info.c): its own window for any icon, a drawer's or the desktop's (Icons >
  *     Information...), as workbench.library's WBInfo() does nothing while Workbench isn't running;
  *   - the screen's title, "OpenBench 0.1 - Chip, Fast, GPU = 1, CPU = 1 (m68k)", kept up to date, with
- *     "+ 8 (m68k)" when the CPU cores board is fitted ("+ 8 (m68k, x86-64)" when its cores run native jobs
- *     too), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
+ *     "+ 10 (m68k/x64)" when the CPU cores board is fitted: 68k code on the host's x86-64 cores (0.1.36, the
+ *     user, 25 October 2026: "perhaps m68k/x64", "so lets do that blend"; barlogo_isas), after room for OpenTitle's logo worked out from the logo's width and the bar's font (0.1.12,
  *     Common/barlogo.h in openamigaprefs, shared with OpenTitle: the bigger logo covered the first letter).
  *   - Workbench's settings (0.1.19): ENV:Sys/Workbench.prefs, Prefs/Workbench's file, read at the start and again
  *     whenever it changes: a tool started from an icon gets at least its default stack, and the devices it
@@ -175,8 +175,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.35"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENBENCH_VERSION "0.1.36"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
