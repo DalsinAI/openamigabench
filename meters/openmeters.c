@@ -945,6 +945,7 @@ static int px0, py0;               /* where the panel is on the screen */
 static ULONG *seen_line;           /* the screen beside the panel when what is behind it was copied */
 static int line_x, line_y, line_n, line_across;
 static int copy_dirty;             /* a window was over the place when it was copied: copy again once it has gone */
+static WORD was_x, was_y, was_w, was_h;   /* where the panel was before it opened again; was_w 0: nowhere */
 
 /* True while a window on the screen has its menus up. */
 static int menus_up(void)
@@ -1025,6 +1026,7 @@ static struct NewMenu newmenus[] = {
 
 static void close_panel(void)
 {
+    if (win) { was_x = win->LeftEdge; was_y = win->TopEdge; was_w = win->Width; was_h = win->Height; }
     if (win) { ClearMenuStrip(win); CloseWindow(win); win = NULL; }
     if (menus) { FreeMenus(menus); menus = NULL; }
     if (vi) { FreeVisualInfo(vi); vi = NULL; }
@@ -1069,6 +1071,10 @@ static int open_panel(void)
     /* what is behind the panel, before the window is there (a window over its place is copied too: then the
      * copy is made again once it has gone) */
     copy_dirty = covered(x, y, w, h);
+    /* 0.2.5: smaller than it was, or moved (a smaller font): the desktop where the panel was may not be drawn
+     * again yet, and the copy kept the old panel's edge; copied again at the next tick */
+    if (was_w && (was_x < x || was_y < y || was_x + was_w > x + w || was_y + was_h > y + h)) copy_dirty = 1;
+    was_w = 0;
     card = truecolour();
     if (card) {
         shelf_px = AllocVec(W * H * 4, MEMF_ANY);
