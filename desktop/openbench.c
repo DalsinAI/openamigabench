@@ -75,6 +75,10 @@
  *     on (ENV:Sys/IconLabels "close", OpenLook's Workbench tab) a desktop icon's label goes where icon.library
  *     puts it, 2 rows under the lowest row of its picture that isn't empty, instead of OpenBench's own 4 under the
  *     icon's whole box; when the setting changes the desktop's icons are read again;
+ *   - the icons' labels in Font prefs' Workbench icon text font (0.1.31; the user's solid OS list, 24 October
+ *     2026): on the desktop and in the drawers (wb_look.label_font), when Font prefs sets one, as OpenMeters
+ *     draws in it; with none, in the theme's font as before. A change comes back with the screen IPrefs resets,
+ *     or, when it doesn't reset it, with the desktop and its drawers opened again two seconds later;
  *
  * Next (the user's order): Leave Out and Put Away (icons on the desktop, .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -141,7 +145,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.30"
+#define OPENBENCH_VERSION "0.1.31"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -198,6 +202,11 @@ static wb_look look;
 static ogt_theme theme;
 static ogt_ctx ctx;
 static struct TextAttr ta;
+/* 0.1.31: the icons' labels' font, Font prefs' Workbench icon text font (look.label_font, NULL when Font prefs sets
+ * none: the labels in look.font, as before); what Font prefs asked for when it was opened, to see it change */
+static struct TextAttr label_ta, label_asked;
+static char label_name[128], label_asked_name[128];
+static int label_set;
 static char screen_title[160];
 
 /* ---- the theme, as OpenDrawer reads it ------------------------------------------------------- */
@@ -1926,6 +1935,7 @@ static void desktop_down(void)
     if (dri) { FreeScreenDrawInfo(look.scr, dri); dri = NULL; }
     free_icons();
     if (look.font) { CloseFont(look.font); look.font = NULL; }
+    if (look.label_font) { CloseFont(look.label_font); look.label_font = NULL; }
     if (look.ctx) { ogt_ctx_free(&ctx); look.ctx = NULL; }
     ogt_theme_free(&theme);
     if (look.scr) { UnlockPubScreen(NULL, look.scr); look.scr = NULL; }
@@ -1948,6 +1958,10 @@ static int desktop_up(void)
     look.ctx = &ctx;
     look.font = ogt_open_font(&theme, look.scr, &ta);
     look.ta = &ta;
+    /* 0.1.31: the labels, on the desktop and in the drawers, in Font prefs' Workbench icon text font when it sets
+     * one (the user's solid OS list, 24 October 2026, as OpenMeters 0.2.5 draws in it) */
+    label_set = ogt_icon_font_attr(&label_asked, label_asked_name, sizeof label_asked_name);
+    look.label_font = label_set ? ogt_open_icon_font(&label_ta, label_name, sizeof label_name) : NULL;
     make_title();
 
     /* the backdrop: the theme's gradient now, the picture when it is decoded */
@@ -1966,7 +1980,8 @@ static int desktop_up(void)
     root->UserPort = idcmp;
     ModifyIDCMP(root, IDCMP_MOUSEBUTTONS | IDCMP_MOUSEMOVE | IDCMP_REFRESHWINDOW | IDCMP_MENUPICK |
                       IDCMP_DISKINSERTED | IDCMP_DISKREMOVED);
-    if (look.font) SetFont(root->RPort, look.font);
+    if (look.label_font) SetFont(root->RPort, look.label_font);    /* the root window draws only the labels */
+    else if (look.font) SetFont(root->RPort, look.font);
     SetDrMd(root->RPort, JAM1);
     label_h = root->RPort->TxHeight;
     dri = GetScreenDrawInfo(look.scr);
@@ -2299,9 +2314,23 @@ static void aloha_stop(void)
 
 /* ENV:Sys's files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns; and (0.1.30)
  * icon.library's labels close to the image. */
-static struct NotifyRequest wbp_nr, pat_nr, lbl_nr;
-static BYTE wbp_sig = -1, pat_sig = -1, lbl_sig = -1;
-static int wbp_notify, pat_notify, lbl_notify;
+static struct NotifyRequest wbp_nr, pat_nr, lbl_nr, fnt_nr;
+static BYTE wbp_sig = -1, pat_sig = -1, lbl_sig = -1, fnt_sig = -1;
+static int wbp_notify, pat_notify, lbl_notify, fnt_notify;
+static int font_check;                      /* 0.1.31: Font prefs changed: look again at the next tick but one */
+
+/* 0.1.31: Font prefs' Workbench icon text font is not the one the labels were opened in. Font prefs' Use resets
+ * the Workbench screen (IPrefs), and the desktop comes back in the new font by itself; this is for a change that
+ * doesn't reset it. */
+static int label_font_changed(void)
+{
+    struct TextAttr now;
+    char name[128];
+    int set = ogt_icon_font_attr(&now, name, sizeof name);
+    if (set != label_set) return 1;
+    return set && (strcmp(name, label_asked_name) || now.ta_YSize != label_asked.ta_YSize ||
+                   now.ta_Style != label_asked.ta_Style || now.ta_Flags != label_asked.ta_Flags);
+}
 
 static int notify_on(struct NotifyRequest *nr, const char *name, BYTE sig)
 {
@@ -2377,6 +2406,8 @@ static int run(void)
     pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", pat_sig);
     lbl_sig = AllocSignal(-1);
     lbl_notify = notify_on(&lbl_nr, "ENV:Sys/IconLabels", lbl_sig);
+    fnt_sig = AllocSignal(-1);
+    fnt_notify = notify_on(&fnt_nr, "ENV:Sys/font.prefs", fnt_sig);
     wbc_start();                                   /* OpenLook's close notice */
     ob_drop_start(&drop_env);                      /* 0.1.26: before the dock and WBStartup add AppWindows */
     start_dock();
@@ -2397,7 +2428,7 @@ static int run(void)
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
                           (1UL << pub->mp_SigBit) |
                           (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) |
-                          (lbl_sig >= 0 ? 1UL << lbl_sig : 0) | wbc_sigmask() |
+                          (lbl_sig >= 0 ? 1UL << lbl_sig : 0) | (fnt_sig >= 0 ? 1UL << fnt_sig : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
                           ob_drop_sigmask() | SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
@@ -2476,6 +2507,7 @@ static int run(void)
             }
         }
         if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
+        if (fnt_sig >= 0 && (sigs & (1UL << fnt_sig))) font_check = 2;    /* after the reset IPrefs may make */
         if (lbl_sig >= 0 && (sigs & (1UL << lbl_sig)) && root) {
             /* labels close to the image, or not: the desktop's icons read again, once icon.library (which reads
              * its setting at most once a second) has the new one; drawers follow when they are opened again */
@@ -2503,6 +2535,15 @@ static int run(void)
             if (root && make_title()) titles_everywhere();
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
+            /* 0.1.31: Font prefs changed and the screen wasn't reset: the desktop and its drawers again, in the
+             * icons' new font, as after a reset */
+            if (font_check && --font_check == 0 && !wb_down && root && label_font_changed()) {
+                go_down();
+                if (!go_up()) {
+                    desktop_down();
+                    wb_down = 2;                    /* tried again each tick */
+                }
+            }
             tr->tr_time.tv_secs = 2;
             tr->tr_time.tv_micro = 0;
             SendIO((struct IORequest *)tr);
@@ -2550,10 +2591,12 @@ out:
     if (wbp_notify) EndNotify(&wbp_nr);
     if (pat_notify) EndNotify(&pat_nr);
     if (lbl_notify) EndNotify(&lbl_nr);
-    wbp_notify = pat_notify = lbl_notify = 0;
+    if (fnt_notify) EndNotify(&fnt_nr);
+    wbp_notify = pat_notify = lbl_notify = fnt_notify = 0;
     if (wbp_sig >= 0) { FreeSignal(wbp_sig); wbp_sig = -1; }
     if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
     if (lbl_sig >= 0) { FreeSignal(lbl_sig); lbl_sig = -1; }
+    if (fnt_sig >= 0) { FreeSignal(fnt_sig); fnt_sig = -1; }
     desktop_down();                             /* the Information windows, the drawers, the root, the screen */
     wbc_stop();
     wb_thumb_stop();                            /* its process runs our code, and uses datatypes.library */
