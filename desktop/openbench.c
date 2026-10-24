@@ -774,7 +774,9 @@ static void draw_icon(dicon *ic)
                   ICONDRAWA_DrawInfo, (ULONG)dri, TAG_DONE);
     label_box(ic, &lx, &ly, &lw);
     if (ic->selected) {
-        ogt_box(rp, ogt_pen(&ctx, "accent"), (int)lx - 5, (int)ly - 1, (int)lw + 10, (int)label_h + 2);
+        /* 0.1.34: with labels close, round the letters, not over the picture (the font's rows with no ink) */
+        int lead = ip.close ? ogt_font_lead(rp->Font) : 0;
+        ogt_box(rp, ogt_pen(&ctx, "accent"), (int)lx - 5, (int)ly + lead - 1, (int)lw + 10, (int)label_h + 2 - lead);
         ogt_text(rp, ogt_pen(&ctx, "accent.text"), (int)lx, (int)ly, ic->name, (int)lw);
     } else
         ogt_text(rp, ogt_pen(&ctx, "icon.text"), (int)lx, (int)ly, ic->name, (int)lw);
@@ -890,6 +892,7 @@ static void place_icons(int clean)
         memset(c, 0, sizeof *c);
         c->pw = icons[i].w;
         c->ph = icons[i].h;
+        c->fh = wb_icon_full_h(icons[i].dobj, (int)icons[i].w);    /* its whole picture: its size */
         c->lw = ogt_text_width(rp, icons[i].name);
         if (p) {
             c->pin = 1;
