@@ -93,6 +93,7 @@
  *     the Clean Up order (name, kind, size or date); an icon let go of stays the user's for the run, snapped to the
  *     grid, and the others go round it; Disk.info places are no longer used; ENV:Sys/IconLayout and IconLabels
  *     (OpenPrefs' Icons page; labels close by default) followed at once, the drawers too (opengadtools wb_grid.c);
+ *     the desktop's labels light on a dark backdrop and dark on a light one, as the picture's .tone says;
  *   - drag and drop as OS 3.2.3's Workbench does it (0.1.35; the user, 24 October 2026: icons dragged between
  *     windows), measured on lab t4-dnd (ob_drop.c has the table): no qualifier key changes a drop; a copy onto a
  *     name already there asks 3.2.3's question (Replace, Replace all, Skip, Skip all, Cancel), a move within a
@@ -554,6 +555,19 @@ static int device_hidden(const UBYTE *b)
 static struct Task *main_task;
 static BYTE picture_sig = -1;
 static volatile int picture_busy;
+static struct Process *picture_proc;        /* 0.1.34: the picture's process while it decodes, and its ticks */
+static int picture_ticks;
+
+/* 0.1.34: the picture's process, still decoding, on at priority 0 (it starts at -1, under everything else). In the lab
+ * a backdrop chosen while OpenBench ran never came: its process sat ready at -1 behind Shell commands that never wait
+ * at 0, and OpenBench, waiting for it to end before the next picture, stopped too. */
+static void picture_hurry(void)
+{
+    Forbid();
+    if (picture_busy && picture_proc) SetTaskPri(&picture_proc->pr_Task, 0);
+    if (!picture_busy) picture_proc = NULL;
+    Permit();
+}
 static char picture_path[256];
 static struct Screen *picture_scr;
 
@@ -777,10 +791,39 @@ static void icon_extent(dicon *ic, LONG *x0, LONG *y0, LONG *x1, LONG *y1)
     *y1 = ly + label_h + 2;
 }
 
+/* 0.1.34: the desktop's labels in the colour the backdrop asks for (the background pack's lab, 24 October 2026: dark
+ * labels on the dark backdrops were hard to read). OpenUp's backdrops have a sidecar beside the picture,
+ * <picture>.tone, "dark" or "light" (OpenUpTool RECONCILE reads it for Font prefs' pens, which OpenBench doesn't
+ * draw with): on a dark picture the labels are light with a dark shadow, on a light one dark. With no .tone, no
+ * picture, or the Icons page's "The theme's" (ENV:Sys/IconLayout labelcolour=theme), the theme's icon.text as before.
+ * Read when the desktop comes up and when the root picture changes (ENV:Sys/WBPattern.prefs). */
+static int label_tone;                      /* 0 the theme's, 1 light on a dark picture, 2 dark on a light one */
+
+static void read_tone(void)
+{
+    char path[300], buf[16];
+    BPTR f;
+    LONG n;
+    int k;
+    label_tone = 0;
+    if (Lock_exists("ENV:OpenBench/NoPicture") || !root_picture(path, (int)sizeof path - 6)) return;
+    strcat(path, ".tone");
+    if (!(f = Open((CONST_STRPTR)path, MODE_OLDFILE))) return;
+    n = Read(f, buf, sizeof buf - 1);
+    Close(f);
+    buf[n > 0 ? n : 0] = 0;
+    for (k = 0; buf[k]; k++)
+        if (buf[k] >= 'A' && buf[k] <= 'Z') buf[k] += 32;
+    if (!strncmp(buf, "dark", 4)) label_tone = 1;
+    else if (!strncmp(buf, "light", 5)) label_tone = 2;
+}
+
 static void draw_icon(dicon *ic)
 {
+    static const ogt_rgb light = { 0xF4, 0xF4, 0xF4 }, shadow = { 0x10, 0x10, 0x14 }, dark = { 0x1A, 0x1A, 0x1E };
     struct RastPort *rp = root->RPort;
     LONG lx, ly, lw;
+    int tone = ip.tone ? label_tone : 0;
     if (!ic->dobj) return;
     DrawIconState(rp, ic->dobj, NULL, ic->ix, ic->iy, ic->selected ? IDS_SELECTED : IDS_NORMAL,
                   ICONDRAWA_Frameless, TRUE, ICONDRAWA_Borderless, TRUE, ICONDRAWA_EraseBackground, FALSE,
@@ -791,7 +834,12 @@ static void draw_icon(dicon *ic)
         int lead = ip.close ? ogt_font_lead(rp->Font) : 0;
         ogt_box(rp, ogt_pen(&ctx, "accent"), (int)lx - 5, (int)ly + lead - 1, (int)lw + 10, (int)label_h + 2 - lead);
         ogt_text(rp, ogt_pen(&ctx, "accent.text"), (int)lx, (int)ly, ic->name, (int)lw);
-    } else
+    } else if (tone == 1) {                 /* a dark backdrop: light, on a shadow a pixel down and right */
+        ogt_text(rp, ogt_pen_rgb(&ctx, shadow), (int)lx + 1, (int)ly + 1, ic->name, (int)lw);
+        ogt_text(rp, ogt_pen_rgb(&ctx, light), (int)lx, (int)ly, ic->name, (int)lw);
+    } else if (tone == 2)                   /* a light one: dark */
+        ogt_text(rp, ogt_pen_rgb(&ctx, dark), (int)lx, (int)ly, ic->name, (int)lw);
+    else
         ogt_text(rp, ogt_pen(&ctx, "icon.text"), (int)lx, (int)ly, ic->name, (int)lw);
 }
 
@@ -2239,8 +2287,9 @@ static void start_picture(void)
         return;
     picture_scr = look.scr;
     picture_busy = 1;
-    if (!CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384, NP_Name, (ULONG)"OpenBench backdrop",
-                           NP_Priority, -1, TAG_DONE))
+    picture_ticks = 0;
+    if (!(picture_proc = CreateNewProcTags(NP_Entry, (ULONG)picture_entry, NP_StackSize, 16384,
+                                           NP_Name, (ULONG)"OpenBench backdrop", NP_Priority, -1, TAG_DONE)))
         picture_busy = 0;
 }
 
@@ -2250,6 +2299,7 @@ static void drop_picture(void)
 {
     ULONG *old;
     Object *o;
+    picture_hurry();                                /* 0.1.34: not held back while we wait for it */
     while (picture_busy) Delay(5);                  /* the picture's process is in our code */
     if (root) LockLayer(0, root->WLayer);
     old = backdrop;
@@ -2269,6 +2319,7 @@ static void new_picture(void)
 {
     ULONG *grad;
     drop_picture();
+    read_tone();                                /* 0.1.34: the labels' colour from the new picture's .tone */
     grad = gradient_backdrop(bd_w, bd_h);
     LockLayer(0, root->WLayer);
     backdrop = grad;
@@ -2367,6 +2418,7 @@ static int desktop_up(void)
     if ((vi = GetVisualInfo(look.scr, TAG_DONE)) && (menus = CreateMenus(nm, TAG_DONE)) &&
         LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
         SetMenuStrip(root, menus);
+    read_tone();                                /* 0.1.34: the labels' colour from the picture's .tone */
     scan_volumes();
     draw_icons();
     titles_everywhere();
@@ -2908,6 +2960,8 @@ static int run(void)
         }
         if (timer && CheckIO((struct IORequest *)tr)) {
             WaitIO((struct IORequest *)tr);
+            /* 0.1.34: the picture still decoding two ticks on (4 seconds): at 0 (picture_hurry) */
+            if (++picture_ticks == 2) picture_hurry();
             if (root && make_title()) titles_everywhere();
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
