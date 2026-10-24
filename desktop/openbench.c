@@ -2122,6 +2122,17 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
     case IDCMP_MOUSEBUTTONS:
         if (code == SELECTDOWN) {
             dicon *ic = icon_at(mx, my);
+            if (ic && (qual & IEQUALIFIER_LALT)) {
+                /* 0.1.35: Alt held at the press: the icon taken out of the selection, and no drag (OS 3.2.3's,
+                 * measured on lab t4-dnd) */
+                last_click = NULL;
+                pressed_on = NULL;
+                if (ic->selected) {
+                    ic->selected = 0;
+                    redraw_around(ic);
+                }
+                break;
+            }
             if (ic && ic == last_click && DoubleClick(last_secs, last_micros, secs, micros)) {
                 last_click = NULL;
                 pressed_on = NULL;
