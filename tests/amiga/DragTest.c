@@ -13,6 +13,10 @@
  *   DragTest KEY code [QUAL q]            a raw key pressed and let go (hex or decimal)
  *   DragTest DISKIN                       "a disk was inserted", as a drive's file system says it (for a disk
  *                                         mounted or formatted where no drive says so, RAD: say)
+ *   DragTest DISKOUT                      "a disk was taken out", as a drive's file system says it
+ *   DragTest INHIBIT drive ON|OFF         the drive's file system stopped (its disk goes from the desktop, as while Format
+ *                                         works) or started again (it comes back), then DISKOUT or DISKIN: a drive
+ *                                         taken away and given back while the desktop runs
  *   DragTest OPEN path                    opened as the desktop opens it: OpenBench's port (OPENBENCH, openamigaprefs
  *                                         Common/obmsg.h), else workbench.library's OpenWorkbenchObjectA
  *
@@ -278,9 +282,20 @@ int main(void)
         keys_up(keys, nk, qual);
     } else if (!stricmp(act, "DISKIN")) {
         inject(IECLASS_DISKINSERTED, 0, 0, 0, NULL);
+    } else if (!stricmp(act, "DISKOUT")) {
+        inject(IECLASS_DISKREMOVED, 0, 0, 0, NULL);
+    } else if (!stricmp(act, "INHIBIT") && (xy = (LONG **)a[A_XY]) && xy[0] && xy[1]) {
+        LONG on = !stricmp((const char *)xy[1], "ON");
+        if (!Inhibit((CONST_STRPTR)xy[0], on ? DOSTRUE : DOSFALSE)) {
+            PrintFault(IoErr(), (CONST_STRPTR)"DragTest INHIBIT");
+            rc = 10;
+        } else {
+            Delay(25);                              /* the file system takes its volume away, or reads it again */
+            inject(on ? IECLASS_DISKREMOVED : IECLASS_DISKINSERTED, 0, 0, 0, NULL);
+        }
     } else {
         PutStr((CONST_STRPTR)"DragTest LIST | MOVE x y | CLICK x y [DOUBLE] | DRAG x y x2 y2 [STEPS n] [HOLD t] [RIGHT] | "
-                             "KEY code | DISKIN; QUAL a+b\n");
+                             "KEY code | DISKIN | DISKOUT | INHIBIT drive ON|OFF; QUAL a+b\n");
         rc = 10;
     }
     CloseDevice((struct IORequest *)io);
