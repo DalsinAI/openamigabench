@@ -103,6 +103,10 @@
  *     drawers, onto disks and onto the trash, and several selected icons go together; the dragged picture is
  *     the icon itself with its alpha, what is under it showing round it (opengadtools wb_ghost.c); a full or
  *     write-protected disk is DOS's to ask about, with Retry, as on 3.2.3;
+ *     Alt held at the press takes an icon out of the selection, and no drag starts (3.2.3's); a disk that comes or
+ *     goes, or an icon let go of, never lands on an icon the user put somewhere (the deploy lab, 24 October 2026: a
+ *     new DH2 at the top put RAM Disk over System; the columns are now measured at their final widths, opengadtools
+ *     wb_grid.c, and a drop takes the next free cell);
  *
  * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop) and Snapshot; the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -983,6 +987,9 @@ static void drop_on_desktop(dicon *ic)
     if (ip.snap) wb_grid_snap(&gspec, &glay, &c, &x, &y);
     if (x < 0) x = 0;
     if (y < 0) y = 0;
+    /* 0.1.35: on the grid, never onto another icon the user put there: the next free cell down (an icon not put
+     * anywhere goes round it, as every icon does round the user's) */
+    if (ip.snap) wb_grid_free(&gspec, &glay, gcells, nicons, i, (int)(root->Height - 2 * GRID_Y), &x, &y);
     p = place_for(place_key(ic));
     p->x = (WORD)x;
     p->y = (WORD)y;

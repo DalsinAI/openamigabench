@@ -33,7 +33,8 @@
  * says (5.3), and so they differ from 3.2.3's on purpose where the engine keeps files safe: a file goes with its
  * .info, a copy is written under a temporary name until it is whole (so nothing half written is ever left, and
  * there is no "Remove incomplete object?" to ask), a file replaced goes to the trash, a move between volumes is a
- * copy read back before the source goes. Each drop runs in a process of its own, so the desktop never waits for
+ * copy read back before the source goes; a drawer whose copy is stopped half way keeps the files done and is given
+ * its icon, so it shows. Each drop runs in a process of its own, so the desktop never waits for
  * a disk (3.2.3's Workbench waits for its copy); when it is done, the drawers it touched are read again.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. */
@@ -475,6 +476,34 @@ static int is_engine_trash(of_ctx *c, const char *dst)
     return of_path_volume(vol, dst) && of_path_join(t, vol, c->trash) && of_path_equal(t, dst);
 }
 
+/* A copy stopped part-way (Stop, or Cancel at a name already there) keeps what was copied, as OS 3.2.3's does; but
+ * the engine gives a drawer its icon only once everything in it is done, so a drawer stopped half way would be left
+ * without one and couldn't be seen in its window. Each such drawer gets its source's icon (the drawer and the files
+ * in it are whole: nothing half written is left) */
+static void stopped_icons(job *j)
+{
+    int i;
+    for (i = 0; i < j->n; i++) {
+        char to[OF_PATH_MAX], ti[OF_PATH_MAX + 6];
+        const char *name = of_path_name(j->src[i]);
+        struct DiskObject *o;
+        BPTR l;
+        size_t k;
+        if (!*name || !of_path_join(to, j->dst, name) || (k = strlen(to)) + 6 > sizeof ti) continue;
+        if (!is_dir(j->src[i]) || !is_dir(to)) continue;
+        memcpy(ti, to, k);
+        memcpy(ti + k, ".info", 6);
+        if ((l = Lock((CONST_STRPTR)ti, ACCESS_READ))) {
+            UnLock(l);
+            continue;
+        }
+        if ((o = GetDiskObject((CONST_STRPTR)j->src[i]))) {
+            PutDiskObject((CONST_STRPTR)to, o);
+            FreeDiskObject(o);
+        }
+    }
+}
+
 /* The job's process */
 static void job_entry(void)
 {
@@ -494,6 +523,7 @@ static void job_entry(void)
     else if (j->op == OP_MOVE || j->op == OP_TRASH) j->rc = of_move(&c, (const char *const *)j->src, j->n, j->dst);
     else j->rc = of_copy(&c, (const char *const *)j->src, j->n, j->dst);
     if (j->rc == OF_ERR_IO && j->failed) j->rc = OF_OK;     /* of_delete's word for "some failed": said below */
+    if ((j->op == OP_COPY || j->op == OP_MOVE) && (j->stopped || stopping || j->rc == OF_ERR_CANCEL)) stopped_icons(j);
     job_window_close(j);
     if (!stopping && j->rc != OF_ERR_CANCEL && (j->failed || j->rc != OF_OK)) {
         struct EasyStruct es;
