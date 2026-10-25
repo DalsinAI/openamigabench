@@ -23,7 +23,12 @@ GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
 [ "${GCCV%%.*}" -ge 16 ] 2>/dev/null || { echo "$CC is GCC $GCCV: this needs GCC 16 (the os32-gcc16 stove; set OS32_GCC16)"; exit 2; }
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
-"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common \
+# GCC 16.2.0-open3's late-combine pass has a wrong-code bug (GCC PR 123853): wbclose.h's strcpy(r->name,
+# "OpenWBNotify") came out as a copy that steps a1 and stores through a1 again, one byte late, so the semaphore was
+# named "". Off until OpenAmigaGCC open4 (openamigagcc #29), on a compiler that knows the option (as desktop/build.sh).
+LATE=""
+if "$CC" -fno-late-combine-instructions -S -o /dev/null -x c /dev/null 2>/dev/null; then LATE="-fno-late-combine-instructions"; fi
+"$CC" -noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common $LATE \
     -I"$OGT/lib" -I"$OAP/Common" -o "$OUT/OpenMeters" "$HERE/openmeters.c" "$OGT/lib/ogt_theme.c" "$OGT/lib/ogt_font.c" -lamiga
 echo "OpenMeters: $(wc -c < "$OUT/OpenMeters") bytes"
 # its icon, OpenMeters.info beside it: a frosted panel of bars, a GlowIcon in the Open family's style, with the

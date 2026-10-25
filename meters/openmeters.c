@@ -48,6 +48,11 @@
  * 0.2.6: Font prefs' font is opened through opengadtools' ogt_open_icon_font (openfont.library, else
  * diskfont.library), as OpenBench 0.1.31 opens it for its icon labels: one reader for both.
  *
+ * 0.2.7 (W128's scan of the GCC 16 builds, 25 October 2026): built -fno-late-combine-instructions. OpenAmigaGCC
+ * 16.2.0-open3's late-combine pass made wbclose.h's strcpy(r->name, "OpenWBNotify") store each byte one place late,
+ * so a root semaphore OpenMeters made was named "" and no one found it. meters/build.sh turns the pass off on a
+ * compiler that has it, until OpenAmigaGCC open4 (openamigagcc #29); no source changed.
+ *
  * Video RAM: openrtg.library does not yet say how much of the card's memory is in use, so that bar shows the
  * card's video RAM (the AutoConfig board's size, AmigaChrome Team $DA15 product 9 or 15) with no fill.
  *
@@ -90,8 +95,8 @@
 #include "ogt_font.h"
 #include "wbclose.h"
 
-#define OPENMETERS_VERSION "0.2.6"
-static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (24.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENMETERS_VERSION "0.2.7"
+static const char version[] __attribute__((used)) = "$VER: OpenMeters " OPENMETERS_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct IntuitionBase *IntuitionBase;
 struct GfxBase *GfxBase;

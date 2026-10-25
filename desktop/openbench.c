@@ -149,6 +149,11 @@
  *     a requester with DOS's reason, and that icon stays as it was. The file's text is read and edited in plain C
  *     (ob_backdrop.c, tested on the host). Icons left out are desktop icons: Snapshot keeps their places, Clean Up
  *     lays them out;
+ *   - OpenLook's close notice found again (0.1.42; W128's scan of the GCC 16 builds, 25 October 2026): OpenAmigaGCC
+ *     16.2.0-open3's late-combine pass made wbclose.h's strcpy(r->name, "OpenWBNotify") a copy that stored each
+ *     byte one place late ("move.b (a1)+,(a1,d0.l)"), so the root semaphore OpenBench made was named "" and
+ *     FindSemaphore("OpenWBNotify") (OpenLook's patch, wbn_root here) never found it. desktop/build.sh turns the pass
+ *     off on a compiler that has it, until OpenAmigaGCC open4 (openamigagcc #29); no source changed;
  *
  * Next (the user's order): the rest of workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as
  * Directory Opus 5 takes them.
@@ -223,7 +228,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.41"
+#define OPENBENCH_VERSION "0.1.42"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
