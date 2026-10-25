@@ -3,9 +3,10 @@
  * drawing. Plain C with no Amiga headers, tested on the host (tests/host/test_ob_show.c).
  *
  * The setting is ENV:Sys/DesktopIcons ("none" or "show"; openamigaprefs Common/deskicons.h), set by OpenPrefs' Icons
- * page, by OpenBench's Window > No icons, and turned off by Icons > Clean Up. Its notify shares the signal of
- * ENV:Sys/IconLabels' (the 16 signals a task has are all taken), so when that signal comes OpenBench looks at what
- * changed: the desktop's icons are read again only when IconLabels or IconLayout did (ob_seen_changed).
+ * page, by OpenBench's Window > No icons, and turned off by Icons > Clean Up. Its notify shared the signal of
+ * ENV:Sys/IconLabels' up to 0.1.38 (the 16 signals a task has were all taken); since 0.1.39 every notify is a message
+ * on one port (ob_notify.h), and a change of any of the three asks for one look: the desktop's icons are read again
+ * only when IconLabels or IconLayout did change (ob_seen_changed).
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef OB_SHOW_H

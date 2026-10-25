@@ -126,6 +126,13 @@
  *     round it, as round one let go of; Icons > Clean Up lays every desktop icon out and takes their snapshots out
  *     of the record (Snapshot after it keeps the new places). What can't be written (a write-protected disk) is
  *     named in a requester with DOS's reason, and the rest is still written;
+ *   - the drawers' thumbnails on again (0.1.39): a task has 16 signals of its own, and 0.1.38's process asked for 17,
+ *     so the last, the thumbnails' (opengadtools wb_thumb.c), failed and they were quietly off (Instance-32). The
+ *     ENV: files OpenBench follows (Workbench.prefs, WBPattern.prefs, IconLabels with DesktopIcons, IconLayout,
+ *     font.prefs) had a signal each; their notifies now send messages to one port, each request's nr_UserData naming
+ *     its file (ob_notify.c), which frees four signals and leaves three for what takes one for a moment (a
+ *     requester's window, a Delay on the open ROM's dos). Each change does what its signal did. A signal or a port
+ *     run() can't have is said on the Shell, as OpenBench's other lines are;
  *
  * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -186,6 +193,7 @@
 #include "ob_drop.h"
 #include "ob_show.h"
 #include "ob_snap.h"
+#include "ob_notify.h"
 #include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
@@ -197,7 +205,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.38"
+#define OPENBENCH_VERSION "0.1.39"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -2526,8 +2534,8 @@ static void noicons_apply(int what)
     }
 }
 
-/* The labels' notify signal (0.1.37: shared with ENV:Sys/DesktopIcons'): 1 when ENV:Sys/IconLabels or IconLayout
- * changed since it last looked, as read_iconprefs reads them */
+/* The labels' notify (0.1.37: and ENV:Sys/DesktopIcons'; 0.1.39: messages, OB_DO_ICONS): 1 when ENV:Sys/IconLabels or
+ * IconLayout changed since it last looked, as read_iconprefs reads them */
 static ob_seen seen;
 static int iconprefs_moved(void)
 {
@@ -3177,6 +3185,17 @@ static void native_tick(void)
     }
 }
 
+/* 0.1.39: a signal or a port run() asked for and didn't get (AllocSignal, CreateMsgPort), said where OpenBench's other
+ * lines go, so it is never quiet again: 0.1.38's process asked for 17 of a task's 16 signals, and the drawers'
+ * thumbnails were off with no word. */
+static void no_signal(const char *what)
+{
+    if (!run_shell) return;
+    PutStr((CONST_STRPTR)"OpenBench: no free signal for ");
+    PutStr((CONST_STRPTR)what);
+    PutStr((CONST_STRPTR)"\n");
+}
+
 static void aloha_start(void)
 {
     struct Task *wb;
@@ -3184,16 +3203,18 @@ static void aloha_start(void)
     Forbid();
     wb = FindTask((CONST_STRPTR)"Workbench");     /* Hyperion's Workbench has the port: it stays its */
     Permit();
-    if (!wb && (aloha_port = CreateMsgPort())) {
-        AlohaWorkbench((LONG)aloha_port);
-        aloha_on = 1;
+    if (!wb) {
+        if ((aloha_port = CreateMsgPort())) {
+            AlohaWorkbench((LONG)aloha_port);
+            aloha_on = 1;
+        } else no_signal("Intuition's Workbench port");
     }
     /* openrtg.library 0.17 or later has ORTG_NativeSize */
     if ((o = OpenLibrary((CONST_STRPTR)"openrtg.library", 0))) {
         if (o->lib_Version > 0 || o->lib_Revision >= 17) OpenRTGBase = o;
         else CloseLibrary(o);
     }
-    reset_sig = AllocSignal(-1);
+    if ((reset_sig = AllocSignal(-1)) < 0) no_signal("Resize to Window");
 }
 
 static void aloha_stop(void)
@@ -3215,9 +3236,10 @@ static void aloha_stop(void)
 }
 
 /* ENV:Sys's files OpenBench follows (0.1.19): Workbench's settings and IPrefs' patterns; and (0.1.30)
- * icon.library's labels close to the image. */
+ * icon.library's labels close to the image. 0.1.39: every notify sends a message to one port, nfy_port, its
+ * nr_UserData naming the file (ob_notify.h), where each had a signal of its own (17 asked for, of a task's 16). */
 static struct NotifyRequest wbp_nr, pat_nr, lbl_nr, fnt_nr, lay_nr;
-static BYTE wbp_sig = -1, pat_sig = -1, lbl_sig = -1, fnt_sig = -1, lay_sig = -1;
+static struct MsgPort *nfy_port;
 static int wbp_notify, pat_notify, lbl_notify, fnt_notify, lay_notify;
 static int font_check;                      /* 0.1.31: Font prefs changed: look again at the next tick but one */
 
@@ -3234,15 +3256,49 @@ static int label_font_changed(void)
                    now.ta_Style != label_asked.ta_Style || now.ta_Flags != label_asked.ta_Flags);
 }
 
-static int notify_on(struct NotifyRequest *nr, const char *name, BYTE sig)
+/* 0.1.39: a message to nfy_port, user data the file (OB_FILE_*). No NRF_WAIT_REPLY: each message is replied at once
+ * (notify_take), and changes while one waits each send their own, as each signal came. */
+static int notify_on(struct NotifyRequest *nr, const char *name, ULONG file)
 {
-    if (sig < 0) return 0;
+    if (!nfy_port) return 0;
     memset(nr, 0, sizeof *nr);
     nr->nr_Name = (STRPTR)name;
-    nr->nr_Flags = NRF_SEND_SIGNAL;
-    nr->nr_stuff.nr_Signal.nr_Task = main_task;
-    nr->nr_stuff.nr_Signal.nr_SignalNum = (UBYTE)sig;
+    nr->nr_UserData = file;
+    nr->nr_Flags = NRF_SEND_MESSAGE;
+    nr->nr_stuff.nr_Msg.nr_Port = nfy_port;
     return StartNotify(nr) != 0;
+}
+
+/* The files changed since the last look (ob_notify.h), each message replied as it is read */
+static unsigned notify_take(void)
+{
+    struct NotifyMessage *nm;
+    unsigned changed = 0;
+    while (nfy_port && (nm = (struct NotifyMessage *)GetMsg(nfy_port))) {
+        changed = ob_notify_add(changed, nm->nm_NReq ? nm->nm_NReq->nr_UserData : 0);
+        ReplyMsg(&nm->nm_ExecMessage);
+    }
+    return changed;
+}
+
+/* The notifies ended, then the port. EndNotify (dos.library's autodoc) takes the request's messages still on the port
+ * off it and replies them; the open ROM's (amigachrome-guest opendos, od_EndNotify) only tells the handler, so what
+ * is left is replied here before the port goes. The requests are static: a handler that counts its replies
+ * (nr_MsgCount, FSKit's notify_back) still finds them. */
+static void notify_end(void)
+{
+    if (wbp_notify) EndNotify(&wbp_nr);
+    if (pat_notify) EndNotify(&pat_nr);
+    if (lbl_notify) EndNotify(&lbl_nr);
+    if (lay_notify) EndNotify(&lay_nr);
+    if (fnt_notify) EndNotify(&fnt_nr);
+    if (dic_notify) EndNotify(&dic_nr);
+    wbp_notify = pat_notify = lbl_notify = fnt_notify = lay_notify = dic_notify = 0;
+    if (nfy_port) {
+        notify_take();
+        DeleteMsgPort(nfy_port);
+        nfy_port = NULL;
+    }
 }
 
 static int run(void)
@@ -3252,7 +3308,10 @@ static int run(void)
     int i, ok = 0, timer = 0;
 
     main_task = FindTask(NULL);
-    if (!(pub = CreateMsgPort())) return RETURN_FAIL;
+    if (!(pub = CreateMsgPort())) {
+        no_signal("its port");
+        return RETURN_FAIL;
+    }
     pub->mp_Node.ln_Name = (char *)PORT_NAME;
     pub->mp_Node.ln_Pri = 0;
     Forbid();
@@ -3272,8 +3331,14 @@ static int run(void)
      * which wb_pic opens for itself: 0.1.20, which never opened it, drew them all as icons (Instance-32) */
     wb_pic_open();
     if (!IconBase) goto out;
-    if (!(launch_port = CreateMsgPort())) goto out;
-    if ((picture_sig = AllocSignal(-1)) < 0) goto out;
+    if (!(launch_port = CreateMsgPort())) {
+        no_signal("the programs it starts");
+        goto out;
+    }
+    if ((picture_sig = AllocSignal(-1)) < 0) {
+        no_signal("the root picture");
+        goto out;
+    }
     if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     if (!rtg_here(look.scr)) {
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: OpenRTG reports no RTG here: Workbench as usual\n");
@@ -3291,7 +3356,10 @@ static int run(void)
         if (run_shell) PutStr((CONST_STRPTR)"OpenBench: LoadWB started no Workbench: OpenBench on this screen\n");
         if (!(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) goto out;
     }
-    if (!(idcmp = CreateMsgPort())) goto out;
+    if (!(idcmp = CreateMsgPort())) {
+        no_signal("its windows");
+        goto out;
+    }
     look.port = idcmp;
     look.open_object = ob_open_object;
     look.info_object = ob_info_object;
@@ -3306,30 +3374,30 @@ static int run(void)
     if (!desktop_up()) goto out;
     ok = 1;
 
-    wbp_sig = AllocSignal(-1);
-    pat_sig = AllocSignal(-1);
-    wbp_notify = notify_on(&wbp_nr, "ENV:Sys/Workbench.prefs", wbp_sig);
-    pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", pat_sig);
-    lbl_sig = AllocSignal(-1);
-    lbl_notify = notify_on(&lbl_nr, "ENV:Sys/IconLabels", lbl_sig);
-    lay_sig = AllocSignal(-1);                     /* 0.1.34: the icons' layout (OpenPrefs' Icons page) */
-    lay_notify = notify_on(&lay_nr, "ENV:Sys/IconLayout", lay_sig);
-    /* 0.1.37: No icons' variable, on the labels' signal: a task has 16 signals of its own, and OpenBench's are all
-     * taken (its ports, the notifies, OpenLook's notice, the drops, the timer, the thumbnails); without a notify, the
-     * 2-second timer looks */
-    dic_notify = notify_on(&dic_nr, "ENV:" DESKICONS_VAR, lbl_sig >= 0 ? lbl_sig : lay_sig);
+    /* 0.1.39: the files' notifies, on one port (each had a signal up to 0.1.38) */
+    if (!(nfy_port = CreateMsgPort())) no_signal("the prefs files' notifies");
+    wbp_notify = notify_on(&wbp_nr, "ENV:Sys/Workbench.prefs", OB_FILE_WBPREFS);
+    pat_notify = notify_on(&pat_nr, "ENV:Sys/WBPattern.prefs", OB_FILE_PATTERN);
+    lbl_notify = notify_on(&lbl_nr, "ENV:Sys/IconLabels", OB_FILE_LABELS);
+    /* 0.1.34: the icons' layout (OpenPrefs' Icons page) */
+    lay_notify = notify_on(&lay_nr, "ENV:Sys/IconLayout", OB_FILE_LAYOUT);
+    /* 0.1.37: No icons' variable, looked at with the labels' (OB_DO_ICONS); without a notify, the 2-second timer
+     * looks */
+    dic_notify = notify_on(&dic_nr, "ENV:" DESKICONS_VAR, OB_FILE_DESKICONS);
     ob_seen_init(&seen);
-    iconprefs_moved();                             /* what the labels' signal compares with */
-    fnt_sig = AllocSignal(-1);
-    fnt_notify = notify_on(&fnt_nr, "ENV:Sys/font.prefs", fnt_sig);
+    iconprefs_moved();                             /* what the labels' look compares with */
+    fnt_notify = notify_on(&fnt_nr, "ENV:Sys/font.prefs", OB_FILE_FONT);
     wbc_start();                                   /* OpenLook's close notice */
-    ob_drop_start(&drop_env);                      /* 0.1.26: before the dock and WBStartup add AppWindows */
+    if (wbc_sig < 0 || !wbc_port) no_signal("OpenLook's close notice");
+    /* 0.1.26: before the dock and WBStartup add AppWindows */
+    if (!ob_drop_start(&drop_env)) no_signal("drag and drop's ports");
     start_dock();
     run_wbstartup();
 
     /* every two seconds: the title (free memory) */
-    if ((tport = CreateMsgPort()) && (tr = (struct timerequest *)CreateIORequest(tport, sizeof *tr)) &&
-        !OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_VBLANK, (struct IORequest *)tr, 0)) {
+    if (!(tport = CreateMsgPort())) no_signal("the 2-second timer");
+    else if ((tr = (struct timerequest *)CreateIORequest(tport, sizeof *tr)) &&
+             !OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_VBLANK, (struct IORequest *)tr, 0)) {
         timer = 1;
         tr->tr_node.io_Command = TR_ADDREQUEST;
         tr->tr_time.tv_secs = 2;
@@ -3337,17 +3405,21 @@ static int run(void)
         SendIO((struct IORequest *)tr);
     }
 
-    wb_thumb_start();                           /* the drawers' thumbnails (0.2); none: pictures show their icons */
+    /* the drawers' thumbnails (0.2); none: pictures show their icons. 0.1.39: it fails with no datatypes.library 44
+     * too, so a free signal is looked at first */
+    if (!wb_thumb_start() && DataTypesBase) {
+        BYTE s = AllocSignal(-1);
+        if (s < 0) no_signal("the drawers' thumbnails");
+        else FreeSignal(s);
+    }
     for (;;) {
         ULONG sigs = Wait((1UL << idcmp->mp_SigBit) | (1UL << launch_port->mp_SigBit) | (1UL << picture_sig) | wb_thumb_sigmask() |
-                          (1UL << pub->mp_SigBit) |
-                          (wbp_sig >= 0 ? 1UL << wbp_sig : 0) | (pat_sig >= 0 ? 1UL << pat_sig : 0) |
-                          (lbl_sig >= 0 ? 1UL << lbl_sig : 0) | (fnt_sig >= 0 ? 1UL << fnt_sig : 0) | wbc_sigmask() |
-                          (lay_sig >= 0 ? 1UL << lay_sig : 0) |
+                          (1UL << pub->mp_SigBit) | (nfy_port ? 1UL << nfy_port->mp_SigBit : 0) | wbc_sigmask() |
                           (aloha_port ? 1UL << aloha_port->mp_SigBit : 0) | (reset_sig >= 0 ? 1UL << reset_sig : 0) |
                           ob_drop_sigmask() | SIGBREAKF_CTRL_C | (timer ? 1UL << tport->mp_SigBit : 0));
         struct IntuiMessage *im;
         struct Message *lm;
+        unsigned todo;
         int quit = 0;
         if (sigs & SIGBREAKF_CTRL_C) break;
         /* the Workbench screen is being reset: nothing of ours on it, and no lock, until it is back */
@@ -3414,17 +3486,19 @@ static int run(void)
             }
             ReplyMsg(lm);
         }
-        if (wbp_sig >= 0 && (sigs & (1UL << wbp_sig))) {
+        /* 0.1.39: the files that changed, from their messages (ob_notify.h); each does what its signal did */
+        todo = ob_notify_todo(notify_take());
+        if (todo & OB_DO_WBPREFS) {
             wb_prefs_load();                        /* a new default stack, devices hidden or shown */
             if (root) {
                 scan_volumes();
                 redraw_all();
             }
         }
-        if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
-        if (fnt_sig >= 0 && (sigs & (1UL << fnt_sig))) font_check = 2;    /* after the reset IPrefs may make */
-        if ((lbl_sig >= 0 && (sigs & (1UL << lbl_sig))) || (lay_sig >= 0 && (sigs & (1UL << lay_sig)))) {
-            /* 0.1.37: the signal comes for ENV:Sys/DesktopIcons too (No icons): that at once */
+        if ((todo & OB_DO_PICTURE) && root) new_picture();
+        if (todo & OB_DO_FONT) font_check = 2;     /* after the reset IPrefs may make */
+        if (todo & OB_DO_ICONS) {
+            /* IconLabels, IconLayout, or (0.1.37) ENV:Sys/DesktopIcons (No icons): that at once */
             noicons_apply(ob_show_set(&show, deskicons_none()));
             /* the labels' place or the icons' layout changed (OpenPrefs' Icons page): the desktop's icons read again,
              * once icon.library (which reads its setting at most once a second) has the new one, and (0.1.34) every
@@ -3516,18 +3590,7 @@ out:
     }
     if (tr) DeleteIORequest((struct IORequest *)tr);
     if (tport) DeleteMsgPort(tport);
-    if (wbp_notify) EndNotify(&wbp_nr);
-    if (pat_notify) EndNotify(&pat_nr);
-    if (lbl_notify) EndNotify(&lbl_nr);
-    if (lay_notify) EndNotify(&lay_nr);
-    if (fnt_notify) EndNotify(&fnt_nr);
-    if (dic_notify) EndNotify(&dic_nr);
-    wbp_notify = pat_notify = lbl_notify = fnt_notify = lay_notify = dic_notify = 0;
-    if (wbp_sig >= 0) { FreeSignal(wbp_sig); wbp_sig = -1; }
-    if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
-    if (lbl_sig >= 0) { FreeSignal(lbl_sig); lbl_sig = -1; }
-    if (lay_sig >= 0) { FreeSignal(lay_sig); lay_sig = -1; }
-    if (fnt_sig >= 0) { FreeSignal(fnt_sig); fnt_sig = -1; }
+    notify_end();                               /* 0.1.39: the notifies, then their port */
     desktop_down();                             /* the Information windows, the drawers, the root, the screen */
     wbc_stop();
     wb_thumb_stop();                            /* its process runs our code, and uses datatypes.library */
