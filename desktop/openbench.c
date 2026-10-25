@@ -115,8 +115,19 @@
  *     desktop is still left out there, unseen. Turned off, or with Icons > Clean Up (which turns it off and lays the
  *     icons out), the icons come back where they were. Followed at once, through the labels' notify signal
  *     (ob_show.c);
+ *   - Snapshot (0.1.38; Salvor's OS list, item 53; the user, 25 October 2026, 02:55), as OS 3.2.3's: Icons > Snapshot
+ *     writes the selected icons' places into their .info files (do_CurrentX and do_CurrentY, through icon.library's
+ *     ICONPUTA_OnlyUpdatePosition, so the rest of each file stays as it was), a disk's into its Disk.info; Icons >
+ *     Unsnapshot writes NO_ICON_POSITION; Window > Snapshot > All does every icon, and in a drawer > Window keeps the
+ *     window's place in the drawer's icon (opengadtools wb_drawer.c, with the icons through wb_look's snap). OpenBench
+ *     keeps only the places it wrote itself: ENVARC:OpenBench/Snapshots, read once at the start, lists each with the
+ *     place written (ob_snap.c), and a .info whose place isn't the one listed (made for 3.2.3's small icons, or
+ *     written by 3.2.3 since) goes on the grid as before. A snapshotted icon stays on its cell and the others go
+ *     round it, as round one let go of; Icons > Clean Up lays every desktop icon out and takes their snapshots out
+ *     of the record (Snapshot after it keeps the new places). What can't be written (a write-protected disk) is
+ *     named in a requester with DOS's reason, and the rest is still written;
  *
- * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop) and Snapshot; the rest of
+ * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. AROS's Wanderer and Directory Opus 5 were read for how, and no
@@ -174,6 +185,7 @@
 #include "wb_drawer.h"
 #include "ob_drop.h"
 #include "ob_show.h"
+#include "ob_snap.h"
 #include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
@@ -185,7 +197,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.37"
+#define OPENBENCH_VERSION "0.1.38"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -732,6 +744,8 @@ typedef struct dicon {
     struct DateStamp date;                  /* 0.1.34: the volume's date, for Clean Up by date */
     int selected;
     int lo;                                 /* 0.1.35: a left-out icon's louts[] entry; -1: a disk */
+    int snapped;                            /* 0.1.38: snapshotted by OpenBench, its .info still so: on cell sgx, sgy */
+    int sgx, sgy;
 } dicon;
 
 static dicon icons[MAX_DESK];
@@ -755,7 +769,8 @@ static ob_show show;
  * in this run stays there, on the grid's nearest place unless the Icons page turns snapping off, and the others go
  * round it; Icons > Clean Up lets them all flow again. A Disk.info's own place isn't used: made for another screen
  * and other icons, it is what put the labels into the icons under them (0.1.32); 0.1.33 kept the cell nearest it.
- * Places are kept by name for the run, not written to the Disk.info: OpenBench has no Snapshot yet. */
+ * Places let go of are kept by name for the run; 0.1.38's Snapshot keeps them for good (ob_snap.h): a .info's place
+ * is used only when OpenBench wrote it, and the icon goes back on the cell it had, as one let go of there. */
 #define GRID_X 16                           /* the grid's corner, from the root window's */
 #define GRID_Y 12
 static wb_iconprefs ip;                     /* the icons' settings: ENV:Sys/IconLabels, ENV:Sys/IconLayout */
@@ -773,6 +788,12 @@ typedef struct dplace {
 #define MAX_PLACES (2 * MAX_DESK)
 static dplace places[MAX_PLACES];
 static int nplaces;
+
+/* 0.1.38: Snapshot's record (ob_snap.h): the places OpenBench wrote into .info files, the only ones it keeps. Read
+ * from ENVARC:OpenBench/Snapshots once, when OpenBench starts, and written there when it changes. */
+#define SNAPS_DIR "ENVARC:OpenBench"
+#define SNAPS_FILE SNAPS_DIR "/Snapshots"
+static ob_snap snaps;
 
 /* The icons' settings, as OpenPrefs' Icons page writes them. Labels close to the picture by default (0.1.30 had
  * them under the whole box unless ENV:Sys/IconLabels said "close"): icon.library then ends an icon's box gap - 1
@@ -982,6 +1003,10 @@ static void place_icons(int clean)
             c->pin = 1;
             c->x = p->x;
             c->y = p->y;
+        } else if (icons[i].snapped) {      /* 0.1.38: snapshotted, and not moved in this run: its cell then */
+            c->pin = 1;
+            c->x = icons[i].sgx;
+            c->y = icons[i].sgy;
         }
     }
     wb_grid_columns(&gspec, gcells, nicons, root->Width - 2 * GRID_X, root->Height - 2 * GRID_Y, ip.right, &glay);
@@ -1251,6 +1276,12 @@ static void leftouts_add(void)
         ic->kind = "";
         ic->lo = i;
         ic->dobj = GetIconTags((CONST_STRPTR)ic->path, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        if (ic->dobj) {                             /* 0.1.38: snapshotted on the desktop by OpenBench */
+            char vol[OB_SNAP_VOL], rest[OB_SNAP_PATH];
+            ic->snapped = ob_snap_split(ic->path, vol, sizeof vol, rest, sizeof rest) &&
+                          ob_snap_honour(&snaps, vol, rest, OB_SNAP_DESK, ic->dobj->do_CurrentX, ic->dobj->do_CurrentY,
+                                         &ic->sgx, &ic->sgy);
+        }
         ic->w = 48; ic->h = 40;
         r.MinX = r.MinY = 0;
         if (ic->dobj && GetIconRectangle(root->RPort, ic->dobj, NULL, &r, ICONDRAWA_Borderless, TRUE, TAG_DONE)) {
@@ -1339,6 +1370,9 @@ static void scan_volumes(void)
         snprintf(dpath, sizeof dpath, "%s:Disk", ic->name);
         ic->selected = 0;
         ic->dobj = GetIconTags((CONST_STRPTR)dpath, ICONGETA_FailIfUnavailable, TRUE, ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
+        /* 0.1.38: a Disk.info's place only when OpenBench snapshotted it there (ob_snap.h); 3.2.3's are passed over */
+        ic->snapped = ic->dobj && ob_snap_honour(&snaps, ic->name, "", OB_SNAP_DESK, ic->dobj->do_CurrentX,
+                                                 ic->dobj->do_CurrentY, &ic->sgx, &ic->sgy);
         if (!ic->dobj)                              /* no Disk.info: def_<kind>, or the default disk icon */
             ic->dobj = GetIconTags(NULL, ICONGETA_GetDefaultName, (ULONG)ic->kind, ICONGETA_GetDefaultType, WBDISK,
                                    ICONGETA_Screen, (ULONG)look.scr, TAG_DONE);
@@ -1802,7 +1836,7 @@ static void titles_everywhere(void)
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
-       M_RESIZE, M_CLEANUP, M_PUTAWAY, M_NOICONS };
+       M_RESIZE, M_CLEANUP, M_PUTAWAY, M_NOICONS, M_SNAP_WINDOW, M_SNAP_ALL, M_SNAP, M_UNSNAP };
 
 /* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
@@ -1822,10 +1856,18 @@ static struct NewMenu newmenus[] = {
     /* 0.1.37: the desktop's own Show, in the Window menu as OS 3.2.3's Show and the drawers' Show all files are: no
      * icons on the desktop at all (ENV:Sys/DesktopIcons, as OpenPrefs' Icons page sets it); checked by desktop_up */
     { NM_TITLE, (STRPTR)"Window", NULL, 0, 0, NULL },
+    /* 0.1.38: OS 3.2.3's Snapshot > Window / All, before Show as there. The desktop is a backdrop with no place or
+     * size of its own to keep, so Window is greyed here (the drawers' keeps theirs); All snapshots every icon on it */
+    { NM_ITEM, (STRPTR)"Snapshot", NULL, 0, 0, NULL },
+    { NM_SUB, (STRPTR)"Window", NULL, NM_ITEMDISABLED, 0, (APTR)M_SNAP_WINDOW },
+    { NM_SUB, (STRPTR)"All", NULL, 0, 0, (APTR)M_SNAP_ALL },
     { NM_ITEM, (STRPTR)"No icons", NULL, CHECKIT | MENUTOGGLE, 0, (APTR)M_NOICONS },
     { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
     { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
+    /* 0.1.38: OS 3.2.3's, after Information...: the selected icons' places kept in their .info files, or cleared */
+    { NM_ITEM, (STRPTR)"Snapshot", NULL, 0, 0, (APTR)M_SNAP },
+    { NM_ITEM, (STRPTR)"Unsnapshot", NULL, 0, 0, (APTR)M_UNSNAP },
     { NM_ITEM, (STRPTR)"Put Away", (STRPTR)"P", 0, 0, (APTR)M_PUTAWAY },    /* 0.1.35: icons left out, back */
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Clean Up", (STRPTR)".", 0, 0, (APTR)M_CLEANUP },    /* 0.1.33: the desktop's icons flow again */
@@ -2100,6 +2142,277 @@ static void put_away(void)
     reread_pending = 1;
 }
 
+/* ---- Snapshot (0.1.38; Salvor's OS list, item 53) ----------------------------------------------------------------
+ * As OS 3.2.3's: Icons > Snapshot writes the selected icons' places into their .info files, Icons > Unsnapshot
+ * writes NO_ICON_POSITION there, Window > Snapshot > All does every icon in the window (and in a drawer, > Window
+ * its window's place, opengadtools wb_drawer.c). OpenBench keeps only the places it wrote itself, as its record
+ * (ob_snap.h) lists them; a .info's place it didn't write (3.2.3's, made for its small icons) goes on the grid. */
+
+/* The record from ENVARC:OpenBench/Snapshots, read once when OpenBench starts (no requester while it looks) */
+static void snaps_load(void)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was = me->pr_WindowPtr;
+    BPTR f;
+    LONG n;
+    char *buf;
+    ob_snap_init(&snaps);
+    me->pr_WindowPtr = (APTR)-1;
+    if ((f = Open((CONST_STRPTR)SNAPS_FILE, MODE_OLDFILE))) {
+        if (Seek(f, 0, OFFSET_END) >= 0 && (n = Seek(f, 0, OFFSET_BEGINNING)) > 0 && n < 2097152 &&
+            (buf = AllocVec((ULONG)n + 1, MEMF_ANY))) {
+            n = Read(f, buf, n);
+            if (n > 0) ob_snap_parse(&snaps, buf, n);
+            FreeVec(buf);
+        }
+        Close(f);
+    }
+    me->pr_WindowPtr = was;
+}
+
+/* The record written whole into ENVARC:OpenBench/Snapshots (the drawer made when it isn't there): 0, or DOS's error */
+static LONG snaps_save(void)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was = me->pr_WindowPtr;
+    long need = ob_snap_text(&snaps, NULL, 0);
+    char *buf = AllocVec((ULONG)need + 1, MEMF_ANY);
+    LONG err = 0;
+    BPTR f, l;
+    if (!buf) return ERROR_NO_FREE_STORE;
+    ob_snap_text(&snaps, buf, need + 1);
+    me->pr_WindowPtr = (APTR)-1;
+    if ((l = Lock((CONST_STRPTR)SNAPS_DIR, ACCESS_READ)) || (l = CreateDir((CONST_STRPTR)SNAPS_DIR))) UnLock(l);
+    if (!(f = Open((CONST_STRPTR)SNAPS_FILE, MODE_NEWFILE)))
+        err = IoErr() ? IoErr() : ERROR_OBJECT_NOT_FOUND;
+    else {
+        if (Write(f, buf, (LONG)need) != (LONG)need) err = IoErr() ? IoErr() : ERROR_DISK_FULL;
+        if (!Close(f) && !err) err = IoErr();
+    }
+    me->pr_WindowPtr = was;
+    FreeVec(buf);
+    return err;
+}
+
+/* One icon's place written into its .info (icon: its file without ".info"; a disk's is "Work:Disk"), as 3.2.3's
+ * Snapshot writes it: in a .info that is there, only the place changes (icon.library's ICONPUTA_OnlyUpdatePosition:
+ * the rest of the file is as it was); an icon with none of its own gets one, the default for it (a disk's for its
+ * kind of drive, def_<kind>), at that place. Unsnapshot (x NO_ICON_POSITION) writes nothing where there is no .info.
+ * No DOS requester while it writes: OpenBench's names the icon. 0, or the DOS error. */
+static LONG snap_write(const char *icon, LONG x, LONG y, const char *defname)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was = me->pr_WindowPtr;
+    struct DiskObject *o;
+    LONG err = 0;
+    me->pr_WindowPtr = (APTR)-1;
+    o = GetIconTags((CONST_STRPTR)icon, ICONGETA_FailIfUnavailable, TRUE, ICONA_ErrorCode, (ULONG)&err, TAG_DONE);
+    if (o) {
+        o->do_CurrentX = x;
+        o->do_CurrentY = y;
+        err = 0;
+        if (!PutIconTags((CONST_STRPTR)icon, o, ICONPUTA_OnlyUpdatePosition, TRUE, ICONA_ErrorCode, (ULONG)&err, TAG_DONE)
+            && !err)
+            err = IoErr() ? IoErr() : ERROR_OBJECT_WRONG_TYPE;
+        FreeDiskObject(o);
+    } else if (!err || err == ERROR_OBJECT_NOT_FOUND) {     /* no .info of its own */
+        err = 0;
+        if (x != (LONG)NO_ICON_POSITION) {
+            o = defname ? GetIconTags(NULL, ICONGETA_GetDefaultName, (ULONG)defname, ICONGETA_GetDefaultType, WBDISK, TAG_DONE)
+                        : GetIconTags((CONST_STRPTR)icon, ICONGETA_FailIfUnavailable, FALSE, TAG_DONE);
+            if (!o)
+                err = IoErr() ? IoErr() : ERROR_OBJECT_NOT_FOUND;
+            else {
+                o->do_CurrentX = x;
+                o->do_CurrentY = y;
+                if (!PutIconTags((CONST_STRPTR)icon, o, ICONA_ErrorCode, (ULONG)&err, TAG_DONE) && !err)
+                    err = IoErr() ? IoErr() : ERROR_OBJECT_WRONG_TYPE;
+                FreeDiskObject(o);
+            }
+        }
+    }
+    me->pr_WindowPtr = was;
+    return err;
+}
+
+/* What a Snapshot, an Unsnapshot or a Clean Up couldn't write, for one requester: each icon with DOS's reason */
+typedef struct snapfail {
+    char text[640];
+    int bad, good;
+} snapfail;
+
+static void snapfail_add(snapfail *f, const char *name, LONG err, const char *why)
+{
+    char reason[100], line[180];
+    if (++f->bad > 8) return;                       /* "and more" */
+    if (!why) {
+        if (!Fault(err, NULL, (STRPTR)reason, sizeof reason)) snprintf(reason, sizeof reason, "DOS error %ld", (long)err);
+        why = reason;
+    }
+    snprintf(line, sizeof line, "  %s: %s\n", name, why);
+    if (strlen(f->text) + strlen(line) < sizeof f->text) strcat(f->text, line);
+}
+
+/* The record written when it changed; the requester when anything couldn't be (on window w, else the desktop's) */
+static void snapfail_end(snapfail *f, int changed, const char *what, struct Window *w)
+{
+    struct EasyStruct es = { sizeof(struct EasyStruct), 0, (UBYTE *)"OpenBench", (UBYTE *)"%s", (UBYTE *)"OK" };
+    char text[800];
+    ULONG args[1];
+    LONG err;
+    if (changed && (err = snaps_save())) snapfail_add(f, SNAPS_FILE, err, NULL);
+    if (!f->bad) return;
+    snprintf(text, sizeof text, "%s couldn't write %s:\n%s%s%s", what, f->bad == 1 ? "this" : "these", f->text,
+             f->bad > 8 ? "  and more\n" : "", f->good ? "\nThe others were written." : "");
+    args[0] = (ULONG)text;
+    EasyRequestArgs(w ? w : root, &es, NULL, args);
+}
+
+/* Icons > Snapshot and Unsnapshot (unsnap) on the desktop, and Window > Snapshot > All (all: every icon on it, else
+ * the selected ones). The place written is where icon.library draws the icon in the root window (DrawIconState's,
+ * as do_CurrentX and do_CurrentY are on 3.2.3's desktop), and the record keeps its cell. Nothing moves: a snapshotted
+ * icon is on its cell already, and one unsnapshotted stays there for this run, as on 3.2.3 (it goes on the grid
+ * from the next start, or at Clean Up). */
+static void desk_snapshot(int all, int unsnap)
+{
+    snapfail f;
+    int i, changed = 0;
+    memset(&f, 0, sizeof f);
+    for (i = 0; i < nicons; i++) {
+        dicon *ic = &icons[i];
+        char vol[OB_SNAP_VOL], rest[OB_SNAP_PATH], file[300];
+        LONG err;
+        int r;
+        if (!all && !ic->selected) continue;
+        if (!ob_snap_split(ic->path, vol, sizeof vol, rest, sizeof rest)) {
+            snapfail_add(&f, ic->name, 0, "its name is too long to be kept");
+            continue;
+        }
+        if (ic->lo < 0) snprintf(file, sizeof file, "%s:Disk", ic->name);  /* a disk's Disk.info */
+        else snprintf(file, sizeof file, "%s", ic->path);                  /* an icon left out: its own */
+        if (unsnap) {
+            err = snap_write(file, (LONG)NO_ICON_POSITION, (LONG)NO_ICON_POSITION, NULL);
+            changed |= ob_snap_forget(&snaps, vol, rest);
+            if (ic->snapped && !place_of(place_key(ic))) {
+                dplace *p = place_for(place_key(ic));   /* where it is, for this run */
+                p->x = (WORD)gcells[i].x;
+                p->y = (WORD)gcells[i].y;
+            }
+            ic->snapped = 0;
+            if (err) snapfail_add(&f, ic->name, err, NULL);
+            else f.good++;
+            continue;
+        }
+        if ((err = snap_write(file, ic->ix, ic->iy, ic->lo < 0 ? ic->kind : NULL))) {
+            snapfail_add(&f, ic->name, err, NULL);
+            continue;
+        }
+        if ((r = ob_snap_set(&snaps, vol, rest, OB_SNAP_DESK, ic->ix, ic->iy, gcells[i].x, gcells[i].y)) < 0) {
+            snapfail_add(&f, ic->name, 0, "OpenBench's record of snapshots is full");
+            continue;
+        }
+        changed |= r > 0;
+        ic->snapped = 1;
+        ic->sgx = gcells[i].x;
+        ic->sgy = gcells[i].y;
+        f.good++;
+    }
+    snapfail_end(&f, changed, unsnap ? "Unsnapshot" : "Snapshot", NULL);
+}
+
+/* Icons > Clean Up: every desktop icon goes on the grid, and their snapshots out of the record, so the icons stay
+ * where Clean Up puts them (Snapshot keeps those places); their .info files aren't written, as 3.2.3's Clean Up
+ * writes none */
+static void cleanup_snaps(void)
+{
+    const char *paths[MAX_DESK];
+    snapfail f;
+    int i;
+    for (i = 0; i < nicons; i++) {
+        paths[i] = icons[i].path;
+        icons[i].snapped = 0;
+    }
+    memset(&f, 0, sizeof f);
+    snapfail_end(&f, ob_snap_cleanup(&snaps, paths, nicons) > 0, "Clean Up", NULL);
+}
+
+/* "Work" + "Tools" + "OpenMeters": the path on the volume of an entry in a drawer; 0 when too long */
+static int snap_join(char *out, int n, const char *dir, const char *name)
+{
+    return snprintf(out, (size_t)n, "%s%s%s", dir, dir[0] ? "/" : "", name) < n;
+}
+
+/* wb_look's snapped: the record's place for an icon in a drawer's window. The drawer's path as its disk names it
+ * ("SYS:Tools" is "System:Tools") is kept for the next entry, and a drawer the record has none in is answered at
+ * once; with no snapshots at all nothing is looked up. */
+static char sn_dir[256], sn_vol[OB_SNAP_VOL], sn_rest[OB_SNAP_PATH];
+static unsigned long sn_gen;
+static int sn_any = -1;
+
+static int drawer_snapped(const char *dir, const char *name, int *gx, int *gy, LONG *x, LONG *y)
+{
+    char path[OB_SNAP_PATH];
+    const ob_snap_ent *e;
+    if (!snaps.n) return 0;
+    if (sn_any < 0 || sn_gen != snaps.gen || strcmp(dir, sn_dir)) {
+        char full[256];
+        snprintf(sn_dir, sizeof sn_dir, "%s", dir);
+        sn_gen = snaps.gen;
+        if (!full_name(dir, full, sizeof full)) snprintf(full, sizeof full, "%s", dir);
+        sn_any = ob_snap_split(full, sn_vol, sizeof sn_vol, sn_rest, sizeof sn_rest) &&
+                 ob_snap_count_in(&snaps, sn_vol, sn_rest, OB_SNAP_DRAWER) > 0;
+    }
+    if (!sn_any || !snap_join(path, sizeof path, sn_rest, name) || !(e = ob_snap_find(&snaps, sn_vol, path)) ||
+        e->where != OB_SNAP_DRAWER)
+        return 0;
+    *gx = e->gx;
+    *gy = e->gy;
+    *x = (LONG)e->x;
+    *y = (LONG)e->y;
+    return 1;
+}
+
+/* wb_look's snap: Icons > Snapshot and Unsnapshot in a drawer, and Window > Snapshot > All's icons */
+static int drawer_snap(const char *dir, wb_snapitem *items, int n, int unsnap, wb_drawer *from)
+{
+    snapfail f;
+    char full[256], vol[OB_SNAP_VOL], rest[OB_SNAP_PATH];
+    int i, changed = 0, have;
+    size_t dl = strlen(dir);
+    memset(&f, 0, sizeof f);
+    if (!full_name(dir, full, sizeof full)) snprintf(full, sizeof full, "%s", dir);
+    have = ob_snap_split(full, vol, sizeof vol, rest, sizeof rest);
+    for (i = 0; i < n; i++) {
+        char file[WB_PATH_MAX], path[OB_SNAP_PATH];
+        int keyed = have && snap_join(path, sizeof path, rest, items[i].name), r;
+        LONG err;
+        items[i].done = 0;
+        if (snprintf(file, sizeof file, "%s%s%s", dir, dl && (dir[dl - 1] == ':' || dir[dl - 1] == '/') ? "" : "/",
+                     items[i].name) >= (int)sizeof file || (!keyed && !unsnap)) {
+            snapfail_add(&f, items[i].name, 0, "its name is too long to be kept");
+            continue;
+        }
+        if (unsnap) {
+            err = snap_write(file, (LONG)NO_ICON_POSITION, (LONG)NO_ICON_POSITION, NULL);
+            if (keyed) changed |= ob_snap_forget(&snaps, vol, path);
+        } else if (!(err = snap_write(file, items[i].x, items[i].y, NULL))) {
+            items[i].done = 1;
+            if ((r = ob_snap_set(&snaps, vol, path, OB_SNAP_DRAWER, items[i].x, items[i].y, items[i].gx, items[i].gy)) < 0) {
+                snapfail_add(&f, items[i].name, 0, "OpenBench's record of snapshots is full");
+                continue;
+            }
+            changed |= r > 0;
+        }
+        if (err) snapfail_add(&f, items[i].name, err, NULL);
+        else {
+            items[i].done = 1;
+            f.good++;
+        }
+    }
+    snapfail_end(&f, changed, unsnap ? "Unsnapshot" : "Snapshot", wb_drawer_window(from));
+    return !f.bad;
+}
+
 static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, desk_icon_at, leave_out, leftouts_check };
 
 static void drag_img_close(void)
@@ -2357,6 +2670,9 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             }
             case M_REDRAW: redraw_all(); break;
             case M_PUTAWAY: put_away(); break;      /* 0.1.35 */
+            case M_SNAP: desk_snapshot(0, 0); break;        /* 0.1.38 */
+            case M_UNSNAP: desk_snapshot(0, 1); break;
+            case M_SNAP_ALL: desk_snapshot(1, 0); break;
             case M_CLEANUP: {
                 /* 0.1.37: with No icons on, Clean Up turns it off (written as the Icons page's Save), then lays out */
                 int w;
@@ -2364,6 +2680,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
                     noicons_check();
                     deskicons_write(w);
                 }
+                cleanup_snaps();                    /* 0.1.38: their snapshots go: Snapshot keeps the new places */
                 place_icons(1);
                 redraw_all();
                 break;
@@ -2981,6 +3298,9 @@ static int run(void)
     look.screen_title = screen_title;
     look.drop = ob_drop;                           /* 0.1.26: icons dragged out of a drawer */
     look.hidden = leftout_hidden;                  /* 0.1.35: icons left out aren't shown in their drawers */
+    look.snapped = drawer_snapped;                 /* 0.1.38: Snapshot in the drawers */
+    look.snap = drawer_snap;
+    snaps_load();                                  /* 0.1.38: the places OpenBench snapshotted, before the icons */
     wb_prefs_load();
     aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */
     if (!desktop_up()) goto out;
@@ -3229,6 +3549,7 @@ out:
     if (WorkbenchBase) CloseLibrary(WorkbenchBase);
     if (IconBase) CloseLibrary(IconBase);
     CyberGfxBase = WorkbenchBase = IconBase = NULL;
+    ob_snap_free(&snaps);
     {
         struct Message *lm;
         Forbid();
