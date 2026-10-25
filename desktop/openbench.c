@@ -2288,8 +2288,12 @@ static void desk_snapshot(int all, int unsnap)
             snapfail_add(&f, ic->name, 0, "its name is too long to be kept");
             continue;
         }
-        if (ic->lo < 0) snprintf(file, sizeof file, "%s:Disk", ic->name);  /* a disk's Disk.info */
-        else snprintf(file, sizeof file, "%s", ic->path);                  /* an icon left out: its own */
+        /* a disk's Disk.info, or an icon left out: its own; a name too long for the buffer is said, not cut */
+        r = ic->lo < 0 ? snprintf(file, sizeof file, "%s:Disk", ic->name) : snprintf(file, sizeof file, "%s", ic->path);
+        if (r < 0 || r >= (int)sizeof file) {
+            snapfail_add(&f, ic->name, 0, "its name is too long to be kept");
+            continue;
+        }
         if (unsnap) {
             err = snap_write(file, (LONG)NO_ICON_POSITION, (LONG)NO_ICON_POSITION, NULL);
             changed |= ob_snap_forget(&snaps, vol, rest);
