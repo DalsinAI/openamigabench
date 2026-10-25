@@ -133,6 +133,13 @@
  *     its file (ob_notify.c), which frees four signals and leaves three for what takes one for a moment (a
  *     requester's window, a Delay on the open ROM's dos). Each change does what its signal did. A signal or a port
  *     run() can't have is said on the Shell, as OpenBench's other lines are;
+ *   - a drive mounted while running gets its icon (0.1.40; Salvor's checks, 25 October 2026): a volume added to the DOS
+ *     list with no disk event (a Mount DH2:, a RAD:, a drive Cradle adds: their handlers post no IECLASS_DISKINSERTED)
+ *     had no icon until a disk went in or out somewhere. Each scan of the volumes keeps their fingerprint (ob_vols.c:
+ *     the count, and sums of a hash of each one's name, date and drive), and the 2-second tick takes it again and
+ *     compares; when it differs the volumes are scanned and drawn as after a disk event, so a new one's icon comes
+ *     and a gone one's goes within a tick. No new signal and no faster timer: every 2 seconds one AttemptLockDosList,
+ *     a NextDosEntry for each volume and one more, and an UnLockDosList;
  *
  * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop); the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -194,6 +201,7 @@
 #include "ob_show.h"
 #include "ob_snap.h"
 #include "ob_notify.h"
+#include "ob_vols.h"
 #include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
@@ -205,7 +213,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.39"
+#define OPENBENCH_VERSION "0.1.40"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -1330,19 +1338,50 @@ static int leftout_hidden(const char *dir, const char *name)
     return lout_find(p) >= 0;
 }
 
+/* 0.1.40: the volumes in a drive when they were last scanned (ob_vols.h), what the 2-second tick compares with */
+static ob_volfp vols_seen;
+
+/* A volume, into fingerprint f when it is in a drive; 0 when it isn't. Called with the DOS list locked for volumes. */
+static int vol_fp_add(ob_volfp *f, const struct DosList *dl)
+{
+    const UBYTE *b = (const UBYTE *)BADDR(dl->dol_Name);
+    const struct DateStamp *d = &dl->dol_misc.dol_volume.dol_VolumeDate;
+    if (!dl->dol_Task || !b) return 0;
+    ob_volfp_add(f, b + 1, b[0], d->ds_Days, d->ds_Minute, d->ds_Tick, (unsigned long)dl->dol_Task);
+    return 1;
+}
+
+/* 0.1.40: the 2-second tick's look: 1 when the volumes in a drive aren't the ones scan_volumes last read, as when a
+ * Mount DH2:, a RAD: or a drive Cradle adds brings a volume and no disk event (ob_vols.h). The list is read only when
+ * no one is writing it (AttemptLockDosList), so the main loop never waits on it: a list being changed is looked at on
+ * the next tick. */
+static int volumes_moved(void)
+{
+    struct DosList *dl;
+    ob_volfp now;
+    ob_volfp_init(&now);
+    dl = AttemptLockDosList(LDF_VOLUMES | LDF_READ);
+    if (!dl || dl == (struct DosList *)1) return 0;   /* busy (dos.library's autodoc: old ones answered 1 for it) */
+    while ((dl = NextDosEntry(dl, LDF_VOLUMES))) vol_fp_add(&now, dl);
+    UnLockDosList(LDF_VOLUMES | LDF_READ);
+    return !ob_volfp_same(&now, &vols_seen);
+}
+
 /* The mounted volumes, their Disk.info (where there is none, the default icon for their kind of drive), on the
- * column grid in the Clean Up order. */
+ * column grid in the Clean Up order. 0.1.40: their fingerprint kept, every volume in a drive's, hidden or not. */
 static void scan_volumes(void)
 {
     struct DosList *dl, *start;
     int i;
     free_icons();
     read_iconprefs();
+    ob_volfp_init(&vols_seen);
     dl = start = LockDosList(LDF_VOLUMES | LDF_DEVICES | LDF_READ);
-    while ((dl = NextDosEntry(dl, LDF_VOLUMES)) && nicons < MAX_VOLUMES) {
+    while ((dl = NextDosEntry(dl, LDF_VOLUMES))) {
         UBYTE *b = (UBYTE *)BADDR(dl->dol_Name);
         int n;
-        if (!dl->dol_Task || !b) continue;          /* not in a drive */
+        if (!vol_fp_add(&vols_seen, dl)) continue;  /* not in a drive */
+        if (nicons >= MAX_VOLUMES) continue;
         if (volume_hidden(start, dl)) continue;     /* hidden in Workbench's settings */
         n = b[0] < 63 ? b[0] : 63;
         memcpy(icons[nicons].name, b + 1, (size_t)n);
@@ -2549,6 +2588,17 @@ static int iconprefs_moved(void)
     return ob_seen_changed(&seen, n >= 0 ? a : NULL, m >= 0 ? b : NULL);
 }
 
+/* A disk came or went: Intuition's disk event, or (0.1.40) the 2-second tick saw the volumes change. The volumes read
+ * and drawn again; a new one's icon placed as at the start, a gone one's gone. */
+static void volumes_again(void)
+{
+    drag_img_close();                           /* 0.1.35: a drag ends with the icons it was of */
+    dragging = pressed_on = last_click = NULL;
+    scan_volumes();
+    EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+    draw_icons();
+}
+
 static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG secs, ULONG micros)
 {
     switch (cl) {
@@ -2647,11 +2697,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
         break;
     case IDCMP_DISKINSERTED:
     case IDCMP_DISKREMOVED:
-        drag_img_close();                           /* 0.1.35: a drag ends with the icons it was of */
-        dragging = pressed_on = last_click = NULL;
-        scan_volumes();
-        EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
-        draw_icons();
+        volumes_again();
         break;
     case IDCMP_MENUPICK: {
         UWORD num = code;
@@ -3398,7 +3444,7 @@ static int run(void)
     start_dock();
     run_wbstartup();
 
-    /* every two seconds: the title (free memory) */
+    /* every two seconds: the title (free memory); 0.1.40: the volumes' fingerprint (volumes_moved) */
     if (!(tport = CreateMsgPort())) no_signal("the 2-second timer");
     else if ((tr = (struct timerequest *)CreateIORequest(tport, sizeof *tr)) &&
              !OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_VBLANK, (struct IORequest *)tr, 0)) {
@@ -3537,6 +3583,9 @@ static int run(void)
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
             if (!dic_notify) noicons_apply(ob_show_set(&show, deskicons_none()));   /* 0.1.37: no notify for it */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
+            /* 0.1.40: a volume mounted or dismounted with no disk event (ob_vols.h); not while a desktop icon is
+             * held, which a scan would end: the next tick */
+            if (root && !wb_down && !pressed_on && !dragging && volumes_moved()) volumes_again();
             /* 0.1.31: Font prefs changed and the screen wasn't reset: the desktop and its drawers again, in the
              * icons' new font, as after a reset */
             if (font_check && --font_check == 0 && !wb_down && root && label_font_changed()) {
