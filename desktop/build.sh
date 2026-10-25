@@ -31,6 +31,12 @@ W="$OGT/workbench"
 L="$OGT/lib"
 C="$OAP/Common"
 FLAGS="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common"
+# GCC 16.2.0-open3's late-combine pass has a wrong-code bug (GCC PR 123853): at -O2 it can copy with (aN)+ and use aN
+# again in the same move's destination, which the 68k works out after the step, so each store lands one place late.
+# wbclose.h's strcpy(r->name, "OpenWBNotify") (libnix's inline strcpy) came out that way, so OpenBench's
+# semaphore was named "" and FindSemaphore("OpenWBNotify") never found it. Off until OpenAmigaGCC open4
+# (openamigagcc #29), on a compiler that knows the option.
+if "$CC" -fno-late-combine-instructions -S -o /dev/null -x c /dev/null 2>/dev/null; then FLAGS="$FLAGS -fno-late-combine-instructions"; fi
 TMP=$(mktemp -d)
 # shellcheck disable=SC2086
 # The programs built in (ob_builtin.h, ob_builtin_list.h): each block compiles one program's code with

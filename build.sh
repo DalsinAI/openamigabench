@@ -19,6 +19,11 @@ GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
 OUT=${1:-$HERE/build/os3}
 mkdir -p "$OUT"
 COMMON="-noixemul -m68040 $SPECS -std=gnu99 -Wall -Werror -O2 -fno-tree-loop-distribute-patterns -fno-delete-null-pointer-checks -fno-common"
+# GCC 16.2.0-open3's late-combine pass has a wrong-code bug (GCC PR 123853): at -O2 it can copy with (aN)+ and use aN
+# again in the same move's destination, which the 68k works out after the step, so each store lands one place late
+# (libnix's inline strcpy of a constant does it: openamigaprefs' wbclose.h in desktop/ and meters/). Off until
+# OpenAmigaGCC open4 (openamigagcc #29), on a compiler that knows the option.
+if "$CC" -fno-late-combine-instructions -S -o /dev/null -x c /dev/null 2>/dev/null; then COMMON="$COMMON -fno-late-combine-instructions"; fi
 # The libraries: no C library and no start code (and no loop turned into a
 # call to the memset they define themselves). Each file's first bytes
 # are its own (PROXY_START), so the order of the file's top level is kept.
