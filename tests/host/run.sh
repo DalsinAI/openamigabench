@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenBench host tests: wbspy's lines (tools/spyfmt.c), workbench.library's
-# lists (workbench/wb_core.c), and icon.library's core (icon/icon_core.c)
-# against icons made by Python's own zlib.
+# lists (workbench/wb_core.c), the desktop's No icons (desktop/ob_show.c), and
+# icon.library's core (icon/icon_core.c) against icons made by Python's own zlib.
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -23,6 +23,11 @@ cc -std=gnu99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/icon" "$HERE/icon/icon_
 cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/workbench" "$HERE/workbench/wb_core.c" \
   "$HERE/tests/host/test_wb_core.c" -o "$OUT/test_wb_core"
 "$OUT/test_wb_core"
+# ob_show: the desktop's No icons (OpenBench 0.1.37)
+# shellcheck disable=SC2086
+cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/ob_show.c" \
+  "$HERE/tests/host/test_ob_show.c" -o "$OUT/test_ob_show"
+"$OUT/test_ob_show"
 
 rm -rf "$OUT/icons"
 python3 "$HERE/tests/host/icon_fixtures.py" "$OUT/icons"

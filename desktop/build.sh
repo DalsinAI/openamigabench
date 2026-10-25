@@ -23,7 +23,8 @@ GCCV=$("$CC" -dumpversion 2>/dev/null || echo 0)
 [ "${GCCV%%.*}" -ge 16 ] 2>/dev/null || { echo "$CC is GCC $GCCV: OpenBench needs GCC 16 (the os32-gcc16 stove; set OS32_GCC16)"; exit 2; }
 OUT=${1:-$HERE/../build/os3}
 mkdir -p "$OUT"
-# openamigaprefs' Common headers (obmsg.h, wbclose.h, barlogo.h) and Setup: OAP, default ../../openamigaprefs. The
+# openamigaprefs' Common headers (obmsg.h, wbclose.h, barlogo.h, and since 0.1.37 deskicons.h: openamigaprefs main
+# with OpenPrefs 2.5 or later) and Setup: OAP, default ../../openamigaprefs. The
 # dock is OpenDock, a program of its own (C:OpenDock), which OpenBench starts (0.1.23).
 OAP=${OAP:-$HERE/../../openamigaprefs}
 W="$OGT/workbench"
@@ -91,6 +92,9 @@ BUILTIN_DEFS="$BUILTIN_DEFS -DOB_HAVE_OPENUP_SETUP"
 # shellcheck disable=SC2086
 # shellcheck disable=SC2086
 "$CC" $FLAGS -c -o "$TMP/ob_info.o" "$HERE/ob_info.c"
+# No icons on the desktop (0.1.37): what OpenBench does when ENV:Sys/DesktopIcons changes, plain C (tests/host)
+# shellcheck disable=SC2086
+"$CC" $FLAGS -c -o "$TMP/ob_show.o" "$HERE/ob_show.c"
 # Drag and drop (0.1.26): ob_drop.c, with OpenFiles' engine built for the Amiga (-DOF_AMIGA: its memory from
 # AllocVec, as it runs in a process of its own)
 FILES=${FILES:-$HERE/../../openamigafilemanager}
@@ -111,7 +115,8 @@ DROP_OBJS="$DROP_OBJS $TMP/ob_drop.o"
 # shellcheck disable=SC2086
 "$CC" $FLAGS -I"$W" -I"$L" -c -o "$TMP/wb_dir.o" "$W/wb_dir.c"
 # shellcheck disable=SC2086
-"$CC" $FLAGS $OB_TATA_DEFS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" $BUILTIN_OBJS $DROP_OBJS \
+"$CC" $FLAGS $OB_TATA_DEFS -I"$W" -I"$L" -I"$C" -o "$OUT/OpenBench" "$HERE/openbench.c" "$TMP/ob_builtin.o" "$TMP/ob_malloc.o" "$TMP/ob_info.o" "$TMP/ob_show.o" \
+    $BUILTIN_OBJS $DROP_OBJS \
     "$W/wb_drawer.c" "$TMP/wb_dir.o" "$W/wb_fmt.c" "$W/wb_pic.c" "$W/wb_ghost.c" "$W/wb_glyph.c" "$W/wb_thumb.c" "$W/wb_grid.c" \
     "$L/ogt_theme.c" "$L/ogt_draw.c" "$L/ogt_icons.c" "$L/ogt_font.c" -lamiga
 rm -rf "$TMP"
