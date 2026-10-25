@@ -140,9 +140,18 @@
  *     compares; when it differs the volumes are scanned and drawn as after a disk event, so a new one's icon comes
  *     and a gone one's goes within a tick. No new signal and no faster timer: every 2 seconds one AttemptLockDosList,
  *     a NextDosEntry for each volume and one more, and an UnLockDosList;
+ *   - Leave Out (0.1.41; Team 4's checks, 25 October 2026), as OS 3.2.3's: Icons > Leave Out in a drawer (opengadtools
+ *     wb_drawer.c, through wb_look's leave_out) puts the selected icons on the desktop for good, each one's line
+ *     (":Tools/OpenMeters") written into its disk's .backdrop, so they are left out at every start and gone from their
+ *     drawer; on the desktop it does the same for an icon left out there for the run. Icons > Put Away sends icons
+ *     left out back, their lines taken out of .backdrop (the file deleted when none is left). A disk can't be left
+ *     out (a beep, as for a drawer with nothing selected). What can't be written (a write-protected disk) is named in
+ *     a requester with DOS's reason, and that icon stays as it was. The file's text is read and edited in plain C
+ *     (ob_backdrop.c, tested on the host). Icons left out are desktop icons: Snapshot keeps their places, Clean Up
+ *     lays them out;
  *
- * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop); the rest of
- * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
+ * Next (the user's order): the rest of workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as
+ * Directory Opus 5 takes them.
  *
  * MIT, Copyright (c) 2026 AmigaChrome Team. AROS's Wanderer and Directory Opus 5 were read for how, and no
  * code was taken from them or from Hyperion's. */
@@ -202,6 +211,7 @@
 #include "ob_snap.h"
 #include "ob_notify.h"
 #include "ob_vols.h"
+#include "ob_backdrop.h"
 #include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
@@ -213,7 +223,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.40"
+#define OPENBENCH_VERSION "0.1.41"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -1133,11 +1143,11 @@ static int volume_hidden(struct DosList *start, const struct DosList *vol)
 
 /* ---- icons left out on the desktop (0.1.35) -------------------------------------------------------------
  * As OS 3.2.3 has them (measured, lab t4-dnd, 24 October 2026): an icon let go of on the desktop's space is left out
- * there for this run, gone from its drawer's window and back in it after a reboot; Icons > Leave Out (3.2.3's, or
- * OpenFiles') writes a line ":drawer/name" into the disk's .backdrop, and those are left out at every start; Icons
- * > Put Away puts either kind back, taking its line out of .backdrop (and the file away when no line is left, as
- * 3.2.3 does). A left-out icon opens what it stands for, and dragged into a drawer, onto a disk or onto the trash
- * its file goes there, as from a drawer. */
+ * there for this run, gone from its drawer's window and back in it after a reboot; Icons > Leave Out (3.2.3's,
+ * OpenFiles', or since 0.1.41 OpenBench's own) writes a line ":drawer/name" into the disk's .backdrop, and those are
+ * left out at every start; Icons > Put Away puts either kind back, taking its line out of .backdrop (and the file
+ * away when no line is left, as 3.2.3 does). A left-out icon opens what it stands for, and dragged into a drawer,
+ * onto a disk or onto the trash its file goes there, as from a drawer. */
 typedef struct leftout {
     char path[256];                         /* "Work:Tools/OpenMeters" */
     UBYTE permanent;                        /* named in its disk's .backdrop */
@@ -1169,20 +1179,35 @@ static void lout_drop(int i)
     nlouts--;
 }
 
-/* A disk's .backdrop, whole, as AllocVec'd text (NUL-terminated), or NULL */
-static char *backdrop_text(const char *vol, LONG *len)
+/* A disk's .backdrop, whole, as AllocVec'd text (NUL-terminated), or NULL when the disk has none or it is empty.
+ * *err: 0, or DOS's error when it is there and couldn't be read (then it isn't written over either). No DOS
+ * requester while it looks. */
+static char *backdrop_text(const char *vol, LONG *len, LONG *err)
 {
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was = me->pr_WindowPtr;
     char p[96];
     BPTR fh;
     char *buf = NULL;
     LONG n = 0;
     snprintf(p, sizeof p, "%s:.backdrop", vol);
-    *len = 0;
-    if (!(fh = Open((CONST_STRPTR)p, MODE_OLDFILE))) return NULL;
-    if (Seek(fh, 0, OFFSET_END) >= 0 && (n = Seek(fh, 0, OFFSET_BEGINNING)) > 0 && n < 65536 &&
-        (buf = AllocVec((ULONG)n + 1, MEMF_ANY))) {
-        n = Read(fh, buf, n);
-        if (n < 0) n = 0;
+    *len = *err = 0;
+    me->pr_WindowPtr = (APTR)-1;
+    fh = Open((CONST_STRPTR)p, MODE_OLDFILE);
+    if (!fh && IoErr() != ERROR_OBJECT_NOT_FOUND) *err = IoErr() ? IoErr() : ERROR_OBJECT_IN_USE;
+    me->pr_WindowPtr = was;
+    if (!fh) return NULL;
+    if (Seek(fh, 0, OFFSET_END) < 0 || (n = Seek(fh, 0, OFFSET_BEGINNING)) < 0)
+        *err = IoErr() ? IoErr() : ERROR_SEEK_ERROR;
+    else if (n >= 65536)
+        *err = ERROR_OBJECT_TOO_LARGE;
+    else if (n > 0 && !(buf = AllocVec((ULONG)n + 1, MEMF_ANY)))
+        *err = ERROR_NO_FREE_STORE;
+    else if (n > 0 && (n = Read(fh, buf, n)) < 0) {
+        *err = IoErr() ? IoErr() : ERROR_SEEK_ERROR;
+        FreeVec(buf);
+        buf = NULL;
+    } else if (n > 0) {
         buf[n] = 0;
         *len = n;
     }
@@ -1190,69 +1215,71 @@ static char *backdrop_text(const char *vol, LONG *len)
     return buf;
 }
 
-/* Each line of a disk's .backdrop (":drawer/name") left out, as permanent */
+/* ob_backdrop_parse's each: an icon of the disk being read (vol), left out as permanent */
+static void backdrop_icon(void *ctx, const char *rest)
+{
+    char path[256];
+    int k;
+    if (snprintf(path, sizeof path, "%s:%s", (const char *)ctx, rest) >= (int)sizeof path) return;
+    if ((k = lout_find(path)) >= 0) louts[k].permanent = 1;
+    else if (nlouts < MAX_LEFTOUT) {
+        snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", path);
+        louts[nlouts++].permanent = 1;
+    }
+}
+
+/* Each line of a disk's .backdrop (":drawer/name") left out, as permanent (ob_backdrop.h) */
 static void backdrop_read(const char *vol)
 {
-    LONG len;
-    char *buf = backdrop_text(vol, &len), *line, *next;
+    LONG len, err;
+    char *buf = backdrop_text(vol, &len, &err);
     if (!buf) return;
-    for (line = buf; *line; line = next) {
-        char path[256];
-        int k;
-        for (next = line; *next && *next != '\n'; next++) ;
-        if (*next) *next++ = 0;
-        k = (int)strlen(line);
-        if (k && line[k - 1] == '\r') line[--k] = 0;
-        if (line[0] != ':' || k < 2) continue;
-        {
-            size_t vl = strlen(vol);
-            if (vl + (size_t)k >= sizeof path) continue;
-            memcpy(path, vol, vl);
-            memcpy(path + vl, line, (size_t)k + 1);
-        }
-        if ((k = lout_find(path)) >= 0) louts[k].permanent = 1;
-        else if (nlouts < MAX_LEFTOUT) {
-            snprintf(louts[nlouts].path, sizeof louts[0].path, "%s", path);
-            louts[nlouts++].permanent = 1;
-        }
-    }
+    ob_backdrop_parse(buf, len, backdrop_icon, (void *)vol);
     FreeVec(buf);
 }
 
-/* path's line taken out of its disk's .backdrop; the file goes when no line is left (OS 3.2.3's Put Away) */
-static void backdrop_forget(const char *path)
+/* 0.1.41: path (as its disk names it, "Work:Tools/OpenMeters") added to its disk's .backdrop (add: Icons > Leave
+ * Out) or taken out of it (Icons > Put Away), as OS 3.2.3 writes it (ob_backdrop.h): its line at the end, or every
+ * line naming it gone, and the file deleted when no line is left. Nothing is written when nothing changes. No DOS
+ * requester while it writes (OpenBench's names the icon). 0, or DOS's error. */
+static LONG backdrop_change(const char *path, int add)
 {
-    char vol[64], p[96], *buf, *line, *next, *out;
-    const char *rest = strchr(path, ':');
-    LONG len, k = 0;
-    int n;
-    if (!rest || (n = (int)(rest - path)) >= (int)sizeof vol) return;
-    memcpy(vol, path, (size_t)n);
-    vol[n] = 0;
-    if (!(buf = backdrop_text(vol, &len))) return;
-    if (!(out = AllocVec((ULONG)len + 1, MEMF_ANY))) { FreeVec(buf); return; }
-    for (line = buf; *line; line = next) {
-        int m;
-        for (next = line; *next && *next != '\n'; next++) ;
-        if (*next) *next++ = 0;
-        m = (int)strlen(line);
-        if (m && line[m - 1] == '\r') line[--m] = 0;
-        if (!m || !ci_cmp(line, rest)) continue;
-        memcpy(out + k, line, (size_t)m);
-        k += m;
-        out[k++] = '\n';
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was;
+    char vol[OB_SNAP_VOL], rest[OB_SNAP_PATH], p[OB_SNAP_VOL + 12], *buf, *out;
+    LONG len, need, err = 0;
+    int changed;
+    if (!ob_snap_split(path, vol, sizeof vol, rest, sizeof rest) || !rest[0]) return ERROR_OBJECT_WRONG_TYPE;
+    buf = backdrop_text(vol, &len, &err);
+    if (err) return err;                            /* there, and not read: not written over */
+    need = ob_backdrop_edit(buf, len, rest, add, NULL, 0, &changed);
+    if (need < 0 || !changed) {
+        if (buf) FreeVec(buf);
+        return need < 0 ? ERROR_INVALID_COMPONENT_NAME : 0;
     }
+    if (!(out = AllocVec((ULONG)need + 1, MEMF_ANY))) {
+        if (buf) FreeVec(buf);
+        return ERROR_NO_FREE_STORE;
+    }
+    ob_backdrop_edit(buf, len, rest, add, out, need + 1, &changed);
+    if (buf) FreeVec(buf);
     snprintf(p, sizeof p, "%s:.backdrop", vol);
-    if (!k) DeleteFile((CONST_STRPTR)p);
-    else {
+    was = me->pr_WindowPtr;
+    me->pr_WindowPtr = (APTR)-1;
+    if (!need) {
+        if (!DeleteFile((CONST_STRPTR)p) && IoErr() != ERROR_OBJECT_NOT_FOUND) err = IoErr();
+    } else {
         BPTR fh = Open((CONST_STRPTR)p, MODE_NEWFILE);
-        if (fh) {
-            Write(fh, out, k);
-            Close(fh);
+        if (!fh)
+            err = IoErr() ? IoErr() : ERROR_OBJECT_NOT_FOUND;
+        else {
+            if (Write(fh, out, need) != need) err = IoErr() ? IoErr() : ERROR_DISK_FULL;
+            if (!Close(fh) && !err) err = IoErr();
         }
     }
+    me->pr_WindowPtr = was;
     FreeVec(out);
-    FreeVec(buf);
+    return err;
 }
 
 /* 1 when the disk holding path is among the first nv icons (the disks read) */
@@ -1883,7 +1910,7 @@ static void titles_everywhere(void)
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
-       M_RESIZE, M_CLEANUP, M_PUTAWAY, M_NOICONS, M_SNAP_WINDOW, M_SNAP_ALL, M_SNAP, M_UNSNAP };
+       M_RESIZE, M_CLEANUP, M_PUTAWAY, M_NOICONS, M_SNAP_WINDOW, M_SNAP_ALL, M_SNAP, M_UNSNAP, M_LEAVEOUT };
 
 /* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
@@ -1915,6 +1942,8 @@ static struct NewMenu newmenus[] = {
     /* 0.1.38: OS 3.2.3's, after Information...: the selected icons' places kept in their .info files, or cleared */
     { NM_ITEM, (STRPTR)"Snapshot", NULL, 0, 0, (APTR)M_SNAP },
     { NM_ITEM, (STRPTR)"Unsnapshot", NULL, 0, 0, (APTR)M_UNSNAP },
+    /* 0.1.41: OS 3.2.3's Leave Out, before Put Away as there: an icon left out for the run, for good (.backdrop) */
+    { NM_ITEM, (STRPTR)"Leave Out", (STRPTR)"L", 0, 0, (APTR)M_LEAVEOUT },
     { NM_ITEM, (STRPTR)"Put Away", (STRPTR)"P", 0, 0, (APTR)M_PUTAWAY },    /* 0.1.35: icons left out, back */
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Clean Up", (STRPTR)".", 0, 0, (APTR)M_CLEANUP },    /* 0.1.33: the desktop's icons flow again */
@@ -2161,7 +2190,7 @@ static void leftouts_check(void)
             continue;
         }
         if (IoErr() != ERROR_OBJECT_NOT_FOUND) continue;     /* its disk is out, say: it comes back with it */
-        if (louts[i].permanent) backdrop_forget(louts[i].path);
+        if (louts[i].permanent) backdrop_change(louts[i].path, 0);
         lout_drop(i--);
         gone = 1;
     }
@@ -2170,23 +2199,6 @@ static void leftouts_check(void)
         redraw_all();
         reread_pending = 1;
     }
-}
-
-/* 0.1.35: Icons > Put Away: the selected icons left out go back to their drawers (and out of .backdrop) */
-static void put_away(void)
-{
-    int i, any = 0;
-    for (i = 0; i < nicons; i++) {
-        int k;
-        if (!icons[i].selected || icons[i].lo < 0 || (k = lout_find(icons[i].path)) < 0) continue;
-        if (louts[k].permanent) backdrop_forget(louts[k].path);
-        lout_drop(k);
-        any = 1;
-    }
-    if (!any) return;
-    scan_volumes();
-    redraw_all();
-    reread_pending = 1;
 }
 
 /* ---- Snapshot (0.1.38; Salvor's OS list, item 53) ----------------------------------------------------------------
@@ -2464,6 +2476,116 @@ static int drawer_snap(const char *dir, wb_snapitem *items, int n, int unsnap, w
     return !f.bad;
 }
 
+/* ---- Leave Out and Put Away (0.1.41) -----------------------------------------------------------------------------
+ * As OS 3.2.3's: Icons > Leave Out in a drawer puts the selected icons on the desktop for good, each one's line
+ * written into its disk's .backdrop (ob_backdrop.h), so they are left out at every start, and gone from their drawer;
+ * Icons > Leave Out on the desktop does the same for an icon left out there for the run (let go of on the desktop's
+ * space, 0.1.35); Icons > Put Away sends icons left out back to their drawers, their lines taken out of .backdrop. A
+ * disk is on the desktop already, and can't be left out (a beep, as for a drawer window with nothing selected). What
+ * couldn't be written (a write-protected disk) is named in a requester with DOS's reason, and that icon stays as it
+ * was; the rest is still done. Icons left out are desktop icons like the disks: Snapshot keeps their places
+ * (ob_snap.h, "D"), and Clean Up lays them out. */
+
+/* The desktop's icons read again, and the drawers once this round of messages is done (their icons hidden or back) */
+static void leftouts_changed(void)
+{
+    scan_volumes();
+    redraw_all();
+    reread_pending = 1;
+}
+
+/* wb_look's leave_out: Icons > Leave Out in a drawer (dir), for its selected entries (names). How many were left out. */
+static int drawer_leave_out(const char *dir, const char *const *names, int n, wb_drawer *from)
+{
+    snapfail f;
+    int i, done = 0;
+    size_t dl = strlen(dir);
+    memset(&f, 0, sizeof f);
+    for (i = 0; i < n; i++) {
+        char file[WB_PATH_MAX], full[256];
+        const char *c;
+        LONG err;
+        int k;
+        if (snprintf(file, sizeof file, "%s%s%s", dir, dl && (dir[dl - 1] == ':' || dir[dl - 1] == '/') ? "" : "/",
+                     names[i]) >= (int)sizeof file) {
+            snapfail_add(&f, names[i], 0, "its name is too long to be kept");
+            continue;
+        }
+        /* kept as its disk names it ("SYS:Tools" is "System:Tools"), as .backdrop and the desktop name it */
+        if (!full_name(file, full, sizeof full)) {
+            snapfail_add(&f, names[i], IoErr() ? IoErr() : ERROR_OBJECT_NOT_FOUND, NULL);
+            continue;
+        }
+        if (!(c = strchr(full, ':')) || !c[1]) continue;    /* a disk: on the desktop already */
+        if ((k = lout_find(full)) < 0 && nlouts == MAX_LEFTOUT) {
+            snapfail_add(&f, names[i], 0, "OpenBench has no room for more icons left out");
+            continue;
+        }
+        if ((err = backdrop_change(full, 1))) {
+            snapfail_add(&f, names[i], err, NULL);
+            continue;
+        }
+        if (k < 0) {
+            k = nlouts++;
+            snprintf(louts[k].path, sizeof louts[0].path, "%s", full);
+        }
+        louts[k].permanent = 1;
+        done++;
+        f.good++;
+    }
+    if (done && root) leftouts_changed();
+    if (!done && !f.bad) DisplayBeep(look.scr);
+    snapfail_end(&f, 0, "Leave Out", wb_drawer_window(from));
+    return done;
+}
+
+/* Icons > Leave Out on the desktop: the selected icons left out for the run, left out for good. A disk, or an icon
+ * already in its disk's .backdrop, has nothing to leave out: a beep when no icon had. */
+static void desk_leave_out(void)
+{
+    snapfail f;
+    int i, done = 0;
+    memset(&f, 0, sizeof f);
+    for (i = 0; i < nicons; i++) {
+        dicon *ic = &icons[i];
+        LONG err;
+        int k;
+        if (!ic->selected || ic->lo < 0 || (k = lout_find(ic->path)) < 0 || louts[k].permanent) continue;
+        if ((err = backdrop_change(ic->path, 1))) {
+            snapfail_add(&f, ic->name, err, NULL);
+            continue;
+        }
+        louts[k].permanent = 1;
+        done++;
+        f.good++;
+    }
+    if (!done && !f.bad) DisplayBeep(look.scr);
+    snapfail_end(&f, 0, "Leave Out", NULL);
+}
+
+/* 0.1.35: Icons > Put Away: the selected icons left out go back to their drawers, and (0.1.41) out of .backdrop, or
+ * stay, named, when their line couldn't be taken out */
+static void put_away(void)
+{
+    snapfail f;
+    int i, any = 0;
+    memset(&f, 0, sizeof f);
+    for (i = 0; i < nicons; i++) {
+        LONG err;
+        int k;
+        if (!icons[i].selected || icons[i].lo < 0 || (k = lout_find(icons[i].path)) < 0) continue;
+        if (louts[k].permanent && (err = backdrop_change(louts[k].path, 0))) {
+            snapfail_add(&f, icons[i].name, err, NULL);
+            continue;
+        }
+        lout_drop(k);
+        any = 1;
+        f.good++;
+    }
+    if (any) leftouts_changed();
+    snapfail_end(&f, 0, "Put Away", NULL);
+}
+
 static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, desk_icon_at, leave_out, leftouts_check };
 
 static void drag_img_close(void)
@@ -2728,6 +2850,7 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             }
             case M_REDRAW: redraw_all(); break;
             case M_PUTAWAY: put_away(); break;      /* 0.1.35 */
+            case M_LEAVEOUT: desk_leave_out(); break;       /* 0.1.41 */
             case M_SNAP: desk_snapshot(0, 0); break;        /* 0.1.38 */
             case M_UNSNAP: desk_snapshot(0, 1); break;
             case M_SNAP_ALL: desk_snapshot(1, 0); break;
@@ -3418,6 +3541,7 @@ static int run(void)
     look.hidden = leftout_hidden;                  /* 0.1.35: icons left out aren't shown in their drawers */
     look.snapped = drawer_snapped;                 /* 0.1.38: Snapshot in the drawers */
     look.snap = drawer_snap;
+    look.leave_out = drawer_leave_out;             /* 0.1.41: Icons > Leave Out in the drawers (.backdrop) */
     snaps_load();                                  /* 0.1.38: the places OpenBench snapshotted, before the icons */
     wb_prefs_load();
     aloha_start();                                 /* 0.1.22: Intuition's Workbench port, openrtg.library 0.17 */

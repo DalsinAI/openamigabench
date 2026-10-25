@@ -2,7 +2,8 @@
 # OpenBench host tests: wbspy's lines (tools/spyfmt.c), workbench.library's
 # lists (workbench/wb_core.c), the desktop's No icons (desktop/ob_show.c), Snapshot's
 # record (desktop/ob_snap.c), the ENV: files the desktop follows (desktop/ob_notify.c), the mounted volumes'
-# fingerprint (desktop/ob_vols.c), and icon.library's core (icon/icon_core.c) against icons made by Python's own zlib.
+# fingerprint (desktop/ob_vols.c), a disk's .backdrop (desktop/ob_backdrop.c), and icon.library's core
+# (icon/icon_core.c) against icons made by Python's own zlib.
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")/../.." && pwd)
@@ -44,6 +45,11 @@ cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/o
 cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/ob_vols.c" \
   "$HERE/tests/host/test_ob_vols.c" -o "$OUT/test_ob_vols"
 "$OUT/test_ob_vols"
+# ob_backdrop: a disk's .backdrop, Icons > Leave Out's line added and Put Away's taken out (OpenBench 0.1.41)
+# shellcheck disable=SC2086
+cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/ob_backdrop.c" \
+  "$HERE/tests/host/test_ob_backdrop.c" -o "$OUT/test_ob_backdrop"
+"$OUT/test_ob_backdrop"
 
 rm -rf "$OUT/icons"
 python3 "$HERE/tests/host/icon_fixtures.py" "$OUT/icons"
