@@ -107,6 +107,14 @@
  *     goes, or an icon let go of, never lands on an icon the user put somewhere (the deploy lab, 24 October 2026: a
  *     new DH2 at the top put RAM Disk over System; the columns are now measured at their final widths, opengadtools
  *     wb_grid.c, and a drop takes the next free cell);
+ *   - no icons on the desktop (0.1.37; Salvor's OS list, item 59; the user, 24 October 2026, 21:08: "offer a no-icons
+ *     mode too... for workbench itself"): with ENV:Sys/DesktopIcons "none" (OpenPrefs' Icons page, or Window > No icons
+ *     here; openamigaprefs Common/deskicons.h) the desktop shows no icons at all, disks, icons left out and AppIcons
+ *     alike, and they take no clicks; the backdrop, the bar, the dock and the meters stay. Disks still mount (their
+ *     icons are kept, unseen), drawers still open from the dock, the bar or a Shell, and an icon let go of on the
+ *     desktop is still left out there, unseen. Turned off, or with Icons > Clean Up (which turns it off and lays the
+ *     icons out), the icons come back where they were. Followed at once, through the labels' notify signal
+ *     (ob_show.c);
  *
  * Next (the user's order): Icons > Leave Out in the drawers' menu (written to .backdrop) and Snapshot; the rest of
  * workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as Directory Opus 5 takes them.
@@ -165,6 +173,8 @@
 #endif
 #include "wb_drawer.h"
 #include "ob_drop.h"
+#include "ob_show.h"
+#include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
 #include "wb_thumb.h"
@@ -175,7 +185,7 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.36"
+#define OPENBENCH_VERSION "0.1.37"
 static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
@@ -728,6 +738,9 @@ static dicon icons[MAX_DESK];
 static int nicons;
 static struct DrawInfo *dri;
 static LONG label_h;
+/* 0.1.37: No icons (ob_show.h): while it is on, draw_icon draws nothing, and icon_at and desk_icon_at find nothing. The
+ * icons are still read, kept and laid out, so they come back where they were. */
+static ob_show show;
 
 #define LABEL_GAP 4
 
@@ -828,7 +841,7 @@ static void draw_icon(dicon *ic)
     struct RastPort *rp = root->RPort;
     LONG lx, ly, lw;
     int tone = ip.tone ? label_tone : 0;
-    if (!ic->dobj) return;
+    if (!ic->dobj || !ob_show_icons(&show)) return;     /* 0.1.37: No icons */
     DrawIconState(rp, ic->dobj, NULL, ic->ix, ic->iy, ic->selected ? IDS_SELECTED : IDS_NORMAL,
                   ICONDRAWA_Frameless, TRUE, ICONDRAWA_Borderless, TRUE, ICONDRAWA_EraseBackground, FALSE,
                   ICONDRAWA_DrawInfo, (ULONG)dri, TAG_DONE);
@@ -1354,6 +1367,7 @@ static void scan_volumes(void)
 static dicon *icon_at(LONG x, LONG y)
 {
     int i;
+    if (!ob_show_icons(&show)) return NULL;         /* 0.1.37: No icons: the desktop's space only */
     for (i = nicons - 1; i >= 0; i--) {
         LONG x0, y0, x1, y1;
         icon_extent(&icons[i], &x0, &y0, &x1, &y1);
@@ -1788,7 +1802,7 @@ static void titles_everywhere(void)
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
-       M_RESIZE, M_CLEANUP, M_PUTAWAY };
+       M_RESIZE, M_CLEANUP, M_PUTAWAY, M_NOICONS };
 
 /* 0.1.22: Resize to Window is the fourth item (newmenus[4]), there only while the Workbench screen is on a Native
  * mode (desktop_up leaves it out otherwise), greyed while the screen already has the size the host asks for. */
@@ -1805,6 +1819,10 @@ static struct NewMenu newmenus[] = {
     { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Quit to Workbench...", NULL, 0, 0, (APTR)M_LOADWB },
     { NM_ITEM, (STRPTR)"Quit OpenBench...", (STRPTR)"Q", 0, 0, (APTR)M_QUIT },
+    /* 0.1.37: the desktop's own Show, in the Window menu as OS 3.2.3's Show and the drawers' Show all files are: no
+     * icons on the desktop at all (ENV:Sys/DesktopIcons, as OpenPrefs' Icons page sets it); checked by desktop_up */
+    { NM_TITLE, (STRPTR)"Window", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"No icons", NULL, CHECKIT | MENUTOGGLE, 0, (APTR)M_NOICONS },
     { NM_TITLE, (STRPTR)"Icons", NULL, 0, 0, NULL },
     { NM_ITEM, (STRPTR)"Open", (STRPTR)"O", 0, 0, (APTR)M_ICON_OPEN },
     { NM_ITEM, (STRPTR)"Information...", (STRPTR)"I", 0, 0, (APTR)M_ICON_INFO },
@@ -1983,7 +2001,9 @@ static int desk_icon_at(WORD sx, WORD sy, char *out, int n)
 {
     int i;
     LONG x = root ? sx - root->LeftEdge : 0, y = root ? sy - root->TopEdge : 0;
-    if (!root) return OB_DESK_NONE;
+    /* 0.1.37: No icons: no icon to drop onto, so the desktop's space (an icon from a drawer is left out there, unseen
+     * until the icons come back) */
+    if (!root || !ob_show_icons(&show)) return OB_DESK_NONE;
     for (i = nicons - 1; i >= 0; i--) {
         dicon *ic = &icons[i];
         LONG x0, y0, x1, y1;
@@ -2118,6 +2138,92 @@ static ULONG last_secs, last_micros;
 static dicon *last_click;
 static int quit_to_wb;
 
+/* ---- no icons on the desktop (0.1.37) ---------------------------------------------------------------------------- *
+ * ENV:Sys/DesktopIcons (openamigaprefs Common/deskicons.h): "none", no icons on the desktop; "show" or no variable, the
+ * icons. Set by OpenPrefs' Icons page, by Window > No icons and by Icons > Clean Up (off), and followed at once. */
+static struct Menu *menus;
+static struct NotifyRequest dic_nr;
+static int dic_notify;
+
+/* 1 when ENV:Sys/DesktopIcons says no icons */
+static int deskicons_none(void)
+{
+    char buf[16];
+    LONG n = GetVar((CONST_STRPTR)DESKICONS_VAR, (STRPTR)buf, sizeof buf, GVF_GLOBAL_ONLY);
+    return deskicons_parse(n >= 0 ? buf : NULL, n >= 0 ? (long)n : -1L) == DESKICONS_NONE;
+}
+
+/* The setting into ENV: and ENVARC:, as the Icons page's Save writes it (SetVar, a few tries); a beep when it can't be */
+static void deskicons_write(int none)
+{
+    int i;
+    for (i = 0; i < 5; i++) {
+        if (SetVar((CONST_STRPTR)DESKICONS_VAR, (CONST_STRPTR)deskicons_text(none ? DESKICONS_NONE : DESKICONS_SHOW), -1,
+                   GVF_GLOBAL_ONLY | GVF_SAVE_VAR))
+            return;
+        Delay(10);
+    }
+    if (look.scr) DisplayBeep(look.scr);
+}
+
+/* The root window's menu item with this id (GadTools' user data), or NULL; not a bar */
+static struct MenuItem *menu_item_of(ULONG id)
+{
+    struct Menu *m;
+    struct MenuItem *it;
+    for (m = menus; m; m = m->NextMenu)
+        for (it = m->FirstItem; it; it = it->NextItem)
+            if ((it->Flags & ITEMTEXT) && (ULONG)GTMENUITEM_USERDATA(it) == id) return it;
+    return NULL;
+}
+
+/* Window > No icons' checkmark as the setting is (the Icons page, or Clean Up, changed it) */
+static void noicons_check(void)
+{
+    struct MenuItem *it;
+    if (!root || !menus || !(it = menu_item_of(M_NOICONS))) return;
+    if (!(it->Flags & CHECKED) == !ob_show_checked(&show)) return;
+    ClearMenuStrip(root);
+    if (ob_show_checked(&show)) it->Flags |= CHECKED;
+    else it->Flags &= ~CHECKED;
+    ResetMenuStrip(root, menus);
+}
+
+/* What a change of the setting asks for (ob_show.h). Hidden, no icon stays selected, pressed or dragged (one being
+ * dragged goes back where the drag began), and the desktop is cleared to its backdrop; back, they are drawn where they
+ * were. Their places (places[], the grid) are never touched. */
+static void noicons_apply(int what)
+{
+    int i;
+    if (what == OB_SHOW_HIDE) {
+        drag_img_close();
+        if (dragging) {
+            dragging->ix += drag_ox - dragging->x;
+            dragging->iy += drag_oy - dragging->y;
+            dragging->x = drag_ox;
+            dragging->y = drag_oy;
+        }
+        dragging = pressed_on = last_click = NULL;
+        for (i = 0; i < nicons; i++) icons[i].selected = 0;
+    }
+    noicons_check();
+    if (what != OB_SHOW_KEEP && root) {
+        EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+        draw_icons();
+    }
+}
+
+/* The labels' notify signal (0.1.37: shared with ENV:Sys/DesktopIcons'): 1 when ENV:Sys/IconLabels or IconLayout
+ * changed since it last looked, as read_iconprefs reads them */
+static ob_seen seen;
+static int iconprefs_moved(void)
+{
+    char a[40], b[120];
+    LONG n = GetVar((CONST_STRPTR)"Sys/IconLabels", (STRPTR)a, sizeof a, GVF_GLOBAL_ONLY);
+    LONG m = GetVar((CONST_STRPTR)"Sys/IconLayout", (STRPTR)b, sizeof b, GVF_GLOBAL_ONLY);
+    return ob_seen_changed(&seen, n >= 0 ? a : NULL, m >= 0 ? b : NULL);
+}
+
 static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG secs, ULONG micros)
 {
     switch (cl) {
@@ -2251,10 +2357,23 @@ static int root_event(ULONG cl, UWORD code, UWORD qual, WORD mx, WORD my, ULONG 
             }
             case M_REDRAW: redraw_all(); break;
             case M_PUTAWAY: put_away(); break;      /* 0.1.35 */
-            case M_CLEANUP:
+            case M_CLEANUP: {
+                /* 0.1.37: with No icons on, Clean Up turns it off (written as the Icons page's Save), then lays out */
+                int w;
+                if (ob_show_cleanup(&show, &w) != OB_SHOW_KEEP) {
+                    noicons_check();
+                    deskicons_write(w);
+                }
                 place_icons(1);
                 redraw_all();
                 break;
+            }
+            case M_NOICONS: {                       /* 0.1.37: Window > No icons, its checkmark as Intuition left it */
+                int w;
+                noicons_apply(ob_show_menu(&show, (it->Flags & CHECKED) != 0, &w));
+                deskicons_write(w);
+                break;
+            }
             case M_RESIZE: want_resize = 1; break;   /* not here: it closes the menus being read */
             case M_UPDATE:
                 scan_volumes();
@@ -2317,7 +2436,6 @@ static int run_shell;
  * requester asked for "<No title>" to be closed. */
 static struct MsgPort *idcmp;
 static APTR vi;
-static struct Menu *menus;
 static int resize_shown, resize_greyed;     /* 0.1.22: Resize to Window in the menu, and greyed */
 
 /* The picture, decoded in a process of its own (0.1.3): IPrefs' root picture; ENV:OpenBench/NoPicture, none. */
@@ -2448,12 +2566,15 @@ static int desktop_up(void)
     SetDrMd(root->RPort, JAM1);
     label_h = root->RPort->TxHeight;
     dri = GetScreenDrawInfo(look.scr);
+    /* 0.1.37: No icons (ENV:Sys/DesktopIcons), before the menus (its checkmark) and the icons */
+    ob_show_init(&show, deskicons_none());
     /* the menus; Resize to Window only on a Native mode, greyed while the size is already the one asked for */
     resize_shown = native_monitor(NULL) > 0;
     for (i = k = 0; i < (int)(sizeof newmenus / sizeof newmenus[0]); i++) {
         if (i == RESIZE_INDEX && !resize_shown) continue;
         nm[k] = newmenus[i];
         if (i == RESIZE_INDEX && !native_differs()) nm[k].nm_Flags |= NM_ITEMDISABLED;
+        if (nm[k].nm_UserData == (APTR)M_NOICONS && ob_show_checked(&show)) nm[k].nm_Flags |= CHECKED;
         k++;
     }
     resize_greyed = resize_shown && !native_differs();
@@ -2873,6 +2994,12 @@ static int run(void)
     lbl_notify = notify_on(&lbl_nr, "ENV:Sys/IconLabels", lbl_sig);
     lay_sig = AllocSignal(-1);                     /* 0.1.34: the icons' layout (OpenPrefs' Icons page) */
     lay_notify = notify_on(&lay_nr, "ENV:Sys/IconLayout", lay_sig);
+    /* 0.1.37: No icons' variable, on the labels' signal: a task has 16 signals of its own, and OpenBench's are all
+     * taken (its ports, the notifies, OpenLook's notice, the drops, the timer, the thumbnails); without a notify, the
+     * 2-second timer looks */
+    dic_notify = notify_on(&dic_nr, "ENV:" DESKICONS_VAR, lbl_sig >= 0 ? lbl_sig : lay_sig);
+    ob_seen_init(&seen);
+    iconprefs_moved();                             /* what the labels' signal compares with */
     fnt_sig = AllocSignal(-1);
     fnt_notify = notify_on(&fnt_nr, "ENV:Sys/font.prefs", fnt_sig);
     wbc_start();                                   /* OpenLook's close notice */
@@ -2976,14 +3103,18 @@ static int run(void)
         }
         if (pat_sig >= 0 && (sigs & (1UL << pat_sig)) && root) new_picture();
         if (fnt_sig >= 0 && (sigs & (1UL << fnt_sig))) font_check = 2;    /* after the reset IPrefs may make */
-        if (((lbl_sig >= 0 && (sigs & (1UL << lbl_sig))) || (lay_sig >= 0 && (sigs & (1UL << lay_sig)))) && root) {
+        if ((lbl_sig >= 0 && (sigs & (1UL << lbl_sig))) || (lay_sig >= 0 && (sigs & (1UL << lay_sig)))) {
+            /* 0.1.37: the signal comes for ENV:Sys/DesktopIcons too (No icons): that at once */
+            noicons_apply(ob_show_set(&show, deskicons_none()));
             /* the labels' place or the icons' layout changed (OpenPrefs' Icons page): the desktop's icons read again,
              * once icon.library (which reads its setting at most once a second) has the new one, and (0.1.34) every
-             * drawer's, which are laid out again */
-            Delay(60);
-            scan_volumes();
-            redraw_all();
-            for (i = 0; i < ndrawers; i++) wb_drawer_reread(drawers[i]);
+             * drawer's, which are laid out again. 0.1.37: only when one of the two did change, not for No icons */
+            if (root && iconprefs_moved()) {
+                Delay(60);
+                scan_volumes();
+                redraw_all();
+                for (i = 0; i < ndrawers; i++) wb_drawer_reread(drawers[i]);
+            }
         }
         if ((sigs & wb_thumb_sigmask()) && wb_thumb_collect())
             for (i = 0; i < ndrawers; i++) wb_drawer_thumbs(drawers[i]);
@@ -3006,6 +3137,7 @@ static int run(void)
             if (++picture_ticks == 2) picture_hurry();
             if (root && make_title()) titles_everywhere();
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
+            if (!dic_notify) noicons_apply(ob_show_set(&show, deskicons_none()));   /* 0.1.37: no notify for it */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
             /* 0.1.31: Font prefs changed and the screen wasn't reset: the desktop and its drawers again, in the
              * icons' new font, as after a reset */
@@ -3069,7 +3201,8 @@ out:
     if (lbl_notify) EndNotify(&lbl_nr);
     if (lay_notify) EndNotify(&lay_nr);
     if (fnt_notify) EndNotify(&fnt_nr);
-    wbp_notify = pat_notify = lbl_notify = fnt_notify = lay_notify = 0;
+    if (dic_notify) EndNotify(&dic_nr);
+    wbp_notify = pat_notify = lbl_notify = fnt_notify = lay_notify = dic_notify = 0;
     if (wbp_sig >= 0) { FreeSignal(wbp_sig); wbp_sig = -1; }
     if (pat_sig >= 0) { FreeSignal(pat_sig); pat_sig = -1; }
     if (lbl_sig >= 0) { FreeSignal(lbl_sig); lbl_sig = -1; }
