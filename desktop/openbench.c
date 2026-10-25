@@ -240,7 +240,7 @@ unsigned long __stack = STACK_NEED;
 #define THEME_DIR "SYS:Prefs/Presets/Themes/"
 
 static const char fallback_theme[] =
-    "name Open\nversion 1\nfont \"DejaVu Sans\" 13\n[light]\n"
+    "name Open\nversion 1\nfont \"DejaVu Sans\" 11\n[light]\n"
     "desktop #a3b5c7 0, #8fa3b6 55, #7a8fa5 100\n"
     "window #eceff2\ntext #1c242d\nlabel #1c242d\nmuted #4a5663\n"
     "button #dde2e8\nbutton.text #1c242d\nbutton.border #8794a2\nbutton.highlight #ffffff\n"
