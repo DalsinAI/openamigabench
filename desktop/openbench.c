@@ -154,6 +154,14 @@
  *     byte one place late ("move.b (a1)+,(a1,d0.l)"), so the root semaphore OpenBench made was named "" and
  *     FindSemaphore("OpenWBNotify") (OpenLook's patch, wbn_root here) never found it. desktop/build.sh turns the pass
  *     off on a compiler that has it, until OpenAmigaGCC open4 (openamigagcc #29); no source changed;
+ *   - the backdrop under the screen's title bar (0.1.43; Dale, 26 October 2026: "Why isn't the screen title
+ *     translucent?"): a second backdrop window, the strip, over the bar's rows, filled by the root window's own
+ *     backfill (the gradient and the picture, in screen coordinates), and ShowTitle(screen, TRUE) so the bar stays in
+ *     front of it. OpenTitle 0.7.5 on makes the bar see-through only where a layer behind it covers it all
+ *     (opentitle.c, see_backed), and the root window starts under the bar: with OpenBench alone only the
+ *     compositor's black was behind it, and the bar stayed solid. The strip has no IDCMP and is never active; it is
+ *     a Workbench window (WFLG_WBENCHWINDOW), closed and opened with the root (openamigaprefs TitleBar/DESIGN.md, "Not
+ *     yet");
  *
  * Next (the user's order): the rest of workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as
  * Directory Opus 5 takes them.
@@ -217,6 +225,7 @@
 #include "ob_notify.h"
 #include "ob_vols.h"
 #include "ob_backdrop.h"
+#include "ob_strip.h"
 #include "deskicons.h"
 #include "wb_dir.h"
 #include "wb_fmt.h"
@@ -228,8 +237,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.42"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (25.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENBENCH_VERSION "0.1.43"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (26.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -440,6 +449,7 @@ static int make_title(void)
 /* ---- the root window: the backdrop ----------------------------------------------------------- */
 
 static struct Window *root;
+static struct Window *strip;                /* 0.1.43: the backdrop under the screen's title bar (strip_open) */
 static ULONG *volatile backdrop;            /* the screen's size, ARGB, screen coordinates */
 static LONG bd_w, bd_h;
 static struct Hook backfill_hook;
@@ -492,6 +502,35 @@ static ULONG bf_entry(register struct Hook *h __asm("a0"), register struct RastP
 {
     (void)h;
     return bf_fill(rp, m);
+}
+
+/* 0.1.43: the strip, the backdrop under the screen's title bar: its rows (BarHeight + 1, from the top), with the
+ * root's backfill, so the backdrop goes on under the bar as it is behind the root. ShowTitle keeps the bar in
+ * front of it (a backdrop window over the bar's rows hides the bar otherwise). OpenTitle's see-through bar shows
+ * it then (OpenTitle 0.7.5 on, a composited 32-bit screen with an Intuition that takes ICTRL_BarOpacity); anywhere
+ * else the solid bar covers it. No IDCMP: it is never active and takes no input (the bar is in front of all of
+ * it). Without it OpenBench is as before. */
+static void strip_open(void)
+{
+    ob_box b;
+    if (strip || !look.scr) return;
+    b = ob_strip_box(look.scr->Width, look.scr->BarHeight);
+    strip = OpenWindowTags(NULL, WA_Flags, WFLG_WBENCHWINDOW, WA_Left, b.left, WA_Top, b.top, WA_Width, b.width,
+                           WA_Height, b.height, WA_PubScreen, (ULONG)look.scr, WA_Backdrop, TRUE,
+                           WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_NoCareRefresh, TRUE,
+                           WA_BackFill, (ULONG)&backfill_hook, WA_ScreenTitle, (ULONG)screen_title, WA_IDCMP, 0, TAG_DONE);
+    if (strip) ShowTitle(look.scr, TRUE);
+}
+
+static void strip_close(void)
+{
+    if (strip) { CloseWindow(strip); strip = NULL; }
+}
+
+/* drawn again from the backdrop (the picture came, or another one) */
+static void strip_redraw(void)
+{
+    if (strip) EraseRect(strip->RPort, 0, 0, strip->Width - 1, strip->Height - 1);
 }
 
 /* The theme's desktop gradient, top to bottom, until the picture is ready (or without one). */
@@ -2965,11 +3004,13 @@ static void drop_picture(void)
     picture_hurry();                                /* 0.1.34: not held back while we wait for it */
     while (picture_busy) Delay(5);                  /* the picture's process is in our code */
     if (root) LockLayer(0, root->WLayer);
+    if (strip) LockLayer(0, strip->WLayer);
     old = backdrop;
     backdrop = NULL;
     o = pic_obj;
     pic_bm = NULL;
     pic_obj = NULL;
+    if (strip) UnlockLayer(strip->WLayer);
     if (root) UnlockLayer(root->WLayer);
     if (picture_ready) { FreeVec(picture_ready); picture_ready = NULL; }
     if (old) FreeVec(old);
@@ -2985,9 +3026,12 @@ static void new_picture(void)
     read_tone();                                /* 0.1.34: the labels' colour from the new picture's .tone */
     grad = gradient_backdrop(bd_w, bd_h);
     LockLayer(0, root->WLayer);
+    if (strip) LockLayer(0, strip->WLayer);
     backdrop = grad;
+    if (strip) UnlockLayer(strip->WLayer);
     UnlockLayer(root->WLayer);
     EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+    strip_redraw();
     draw_icons();
     start_picture();
 }
@@ -3001,6 +3045,7 @@ static void desktop_down(void)
     ob_info_quit_all();                         /* the Information windows (they close without saving) */
     while (ndrawers) close_index(ndrawers - 1); /* close_index keeps drawer_paths[] beyond ndrawers */
     drop_picture();
+    strip_close();
     if (root) {
         ClearMenuStrip(root);
         {
@@ -3034,6 +3079,7 @@ static void mark_ours(void);
 static int desktop_up(void)
 {
     int mode;
+    ob_box rb;
     struct NewMenu nm[sizeof newmenus / sizeof newmenus[0]];
     int i, k;
     if (!look.scr && !(look.scr = LockPubScreen((CONST_STRPTR)"Workbench"))) return 0;
@@ -3055,8 +3101,9 @@ static int desktop_up(void)
     backfill_hook.h_Entry = (ULONG (*)())bf_entry;
     /* 0.1.22: a Workbench window (WFLG_WBENCHWINDOW, first: the other tags add to it), as all of OpenBench's
      * are (mark_ours), so CloseWorkBench() asks OpenBench to close it instead of refusing at once */
-    root = OpenWindowTags(NULL, WA_Flags, WFLG_WBENCHWINDOW, WA_Left, 0, WA_Top, look.scr->BarHeight + 1, WA_Width, look.scr->Width,
-                          WA_Height, look.scr->Height - look.scr->BarHeight - 1, WA_PubScreen, (ULONG)look.scr,
+    rb = ob_root_box(look.scr->Width, look.scr->Height, look.scr->BarHeight);
+    root = OpenWindowTags(NULL, WA_Flags, WFLG_WBENCHWINDOW, WA_Left, rb.left, WA_Top, rb.top, WA_Width, rb.width,
+                          WA_Height, rb.height, WA_PubScreen, (ULONG)look.scr,
                           WA_Backdrop, TRUE, WA_Borderless, TRUE, WA_SimpleRefresh, TRUE, WA_BackFill, (ULONG)&backfill_hook,
                           WA_ReportMouse, TRUE, WA_NewLookMenus, TRUE, WA_Activate, TRUE,
                           WA_ScreenTitle, (ULONG)screen_title, WA_IDCMP, 0, TAG_DONE);
@@ -3085,6 +3132,7 @@ static int desktop_up(void)
         LayoutMenus(menus, vi, GTMN_NewLookMenus, TRUE, TAG_DONE))
         SetMenuStrip(root, menus);
     read_tone();                                /* 0.1.34: the labels' colour from the picture's .tone */
+    strip_open();
     scan_volumes();
     draw_icons();
     titles_everywhere();
@@ -3694,13 +3742,16 @@ static int run(void)
         if (sigs & (1UL << picture_sig)) {
             ULONG *old = NULL;
             if (root) LockLayer(0, root->WLayer);
+            if (strip) LockLayer(0, strip->WLayer);
             Forbid();
             if (picture_ready) { old = backdrop; backdrop = picture_ready; picture_ready = NULL; }
             Permit();
+            if (strip) UnlockLayer(strip->WLayer);
             if (root) UnlockLayer(root->WLayer);
             if (old) FreeVec(old);
             if (root && (backdrop || pic_bm)) {
                 EraseRect(root->RPort, 0, 0, root->Width - 1, root->Height - 1);
+                strip_redraw();
                 draw_icons();
             }
         }

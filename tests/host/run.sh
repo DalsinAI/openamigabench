@@ -2,7 +2,7 @@
 # OpenBench host tests: wbspy's lines (tools/spyfmt.c), workbench.library's
 # lists (workbench/wb_core.c), the desktop's No icons (desktop/ob_show.c), Snapshot's
 # record (desktop/ob_snap.c), the ENV: files the desktop follows (desktop/ob_notify.c), the mounted volumes'
-# fingerprint (desktop/ob_vols.c), a disk's .backdrop (desktop/ob_backdrop.c), and icon.library's core
+# fingerprint (desktop/ob_vols.c), a disk's .backdrop (desktop/ob_backdrop.c), the backdrop windows' places (desktop/ob_strip.h), and icon.library's core
 # (icon/icon_core.c) against icons made by Python's own zlib.
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
@@ -50,6 +50,9 @@ cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/o
 cc -std=c99 -Wall -Wextra -Werror -O1 -g $SAN -I"$HERE/desktop" "$HERE/desktop/ob_backdrop.c" \
   "$HERE/tests/host/test_ob_backdrop.c" -o "$OUT/test_ob_backdrop"
 "$OUT/test_ob_backdrop"
+# ob_strip: the root and the strip under the screen's title bar (OpenBench 0.1.43)
+cc -std=c99 -Wall -Wextra -Werror -O1 -I"$HERE/desktop" "$HERE/tests/host/test_ob_strip.c" -o "$OUT/test_ob_strip"
+"$OUT/test_ob_strip"
 
 rm -rf "$OUT/icons"
 python3 "$HERE/tests/host/icon_fixtures.py" "$OUT/icons"
