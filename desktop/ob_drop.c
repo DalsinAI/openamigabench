@@ -10,8 +10,10 @@
  *     or copy as none. At the press, Shift adds to the selection (so several go), Alt takes the icon out of it
  *     (no drag starts), and Left Amiga is Intuition's screen drag;
  *   - a name already there, on a copy: Workbench's requester, "Error while copying "name" / object already
- *     exists", Replace, Replace all, Skip, Skip all, Cancel; on a move within the volume no question, the icon
- *     stays and the screen's title says "Error while moving name: (203) object already exists";
+ *     exists", Replace, Replace all, Skip, Skip all, Cancel; on a move within the volume no question and no
+ *     requester: the icon stays and the screen's title says "Error while moving name: (203) object already exists"
+ *     until the next click (0.1.44; lab t4-dnd, W151, 27 October 2026: it stayed there 15 seconds and more, and a
+ *     click in another drawer window gave the usual title back);
  *   - onto a trashcan's icon: what is on its volume goes into it; from another volume nothing happens;
  *   - onto the desktop's own space: left out there for this run (gone from its drawer, back in it after a
  *     reboot; .backdrop isn't written: only Icons > Leave Out writes it, ":drawer/name" a line);
@@ -181,6 +183,7 @@ typedef struct job {
     int tried, stopped, failed, first_err, rc;
     int answered;                               /* the user said Cancel to a full or write-protected disk */
     char first_failed[OF_PATH_MAX];
+    char said[OF_PATH_MAX + 48];                /* for the screen's title when the job ends (a move's taken name) */
     char into[OF_PATH_MAX];                     /* a disk's contents: the drawer made for them (OP_DISK) */
     struct of_fs *fs;                           /* the job's file system, for a file tried again */
 } job;
@@ -327,18 +330,17 @@ static int job_progress(void *user, const of_progress *p)
     return j->stopped || stopping;
 }
 
-/* A move within the volume onto a name that is taken: not asked about (3.2.3 doesn't ask), the end says so */
+/* A move within the volume onto a name that is taken: not asked about, and no requester at the end either. As on
+ * OS 3.2.3, the screen's title says it (ob_drop_handle hands it to OpenBench, which keeps it there until the next
+ * click); 3.2.3 says each one as it comes, so the last one is what stays. */
 static void job_report_clash(job *j, const char *src)
 {
-    if (!j->failed++) {
-        of_strlcpy(j->first_failed, src, OF_PATH_MAX);
-        j->first_err = OF_ERR_EXISTS;
-    }
+    snprintf(j->said, sizeof j->said, "Error while moving %s: (203) object already exists", of_path_name(src));
 }
 
 /* A name that is taken. A copy asks as OS 3.2.3's Workbench asks (its words and its five answers; Replace sends
  * the old one to the trash, the engine's rule). A move within the volume isn't asked about, as on 3.2.3: that
- * one stays where it is, and the end says why (job_report). */
+ * one stays where it is, and the screen's title says why (job_report_clash). */
 static int job_ask(void *user, const of_clash *c)
 {
     job *j = user;
@@ -896,6 +898,7 @@ void ob_drop_handle(void)
         int i;
         if (!stopping)
             for (i = 0; i < j->ndirs; i++) reread(j->dirs[i]);
+        if (!stopping && j->said[0] && env.say) env.say(j->said);
         job_free(j);
         ended = 1;
     }

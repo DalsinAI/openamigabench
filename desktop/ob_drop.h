@@ -30,6 +30,9 @@ typedef struct ob_drop_env {
     int (*leave_out)(const char *const *paths, int n, WORD sx, WORD sy);
     /* A job has ended: files may have gone from where icons left out on the desktop say they are. */
     void (*changed)(void);
+    /* 0.1.44: words for the screen's title, kept there until the next click, as OS 3.2.3 says an error that asks
+     * nothing (a move within a volume onto a name that is taken). NULL: not said. */
+    void (*say)(const char *text);
 } ob_drop_env;
 
 /* Before the dock and WBStartup: tells workbench.library that drops on AppWindows are delivered (the Team's
