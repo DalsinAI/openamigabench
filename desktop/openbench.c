@@ -1970,8 +1970,10 @@ static const char *title_now(void)
 
 static void say_title(const char *text)
 {
+    char pad[BARLOGO_MAX_SPACES + 1];
     int i;
-    snprintf(held_title, sizeof held_title, "%s", text);
+    barlogo_pad(look.scr, pad);                     /* the bar logo's room, as make_title leaves it */
+    snprintf(held_title, sizeof held_title, "%s%s", pad, text);
     title_held = 1;
     if (root) SetWindowTitles(root, (CONST_STRPTR)~0, (CONST_STRPTR)held_title);
     for (i = 0; i < ndrawers; i++)
