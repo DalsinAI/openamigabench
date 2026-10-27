@@ -162,6 +162,12 @@
  *     compositor's black was behind it, and the bar stayed solid. The strip has no IDCMP and is never active; it is
  *     a Workbench window (WFLG_WBENCHWINDOW), closed and opened with the root (openamigaprefs TitleBar/DESIGN.md, "Not
  *     yet");
+ *   - a move within a volume onto a name that is taken says so in the screen's title, as OS 3.2.3 does, not in a
+ *     requester (0.1.44; W151's lab t4-dnd, 27 October 2026: 3.2.3's title said "Error while moving x.txt: (203)
+ *     object already exists" for 15 seconds and more, until a click in a drawer window; OpenBench 0.1.43 put up a
+ *     requester instead). ob_drop hands the words over when the job ends (ob_drop_env.say); say_title keeps them in
+ *     the title of every OpenBench window, the 2-second tick leaves them there, and the next click (the left button
+ *     pressed in any OpenBench window) gives the usual title back;
  *
  * Next (the user's order): the rest of workbench.library's entries (AppIcons, AppMenuItems) brought to OpenBench, as
  * Directory Opus 5 takes them.
@@ -237,8 +243,8 @@
 #include "ogt_draw.h"
 #include "ogt_font.h"
 
-#define OPENBENCH_VERSION "0.1.43"
-static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (26.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
+#define OPENBENCH_VERSION "0.1.44"
+static const char version[] __attribute__((used)) = "$VER: OpenBench " OPENBENCH_VERSION " (27.10.2026) MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *IconBase;
 struct Library *WorkbenchBase;
@@ -1951,6 +1957,34 @@ static void titles_everywhere(void)
         SetWindowTitles(wb_drawer_window(drawers[i]), (CONST_STRPTR)~0, (CONST_STRPTR)screen_title);
 }
 
+/* 0.1.44: words held in the screen's title until the next click, as OS 3.2.3 shows an error that asks nothing (a
+ * move within a volume onto a name that is taken, from ob_drop). While held, the 2-second tick doesn't put the usual
+ * title back (it still makes it, so the next click shows it as it is then). */
+static char held_title[sizeof screen_title];
+static int title_held;
+
+static const char *title_now(void)
+{
+    return title_held ? held_title : screen_title;
+}
+
+static void say_title(const char *text)
+{
+    int i;
+    snprintf(held_title, sizeof held_title, "%s", text);
+    title_held = 1;
+    if (root) SetWindowTitles(root, (CONST_STRPTR)~0, (CONST_STRPTR)held_title);
+    for (i = 0; i < ndrawers; i++)
+        SetWindowTitles(wb_drawer_window(drawers[i]), (CONST_STRPTR)~0, (CONST_STRPTR)held_title);
+}
+
+static void title_release(void)
+{
+    if (!title_held) return;
+    title_held = 0;
+    if (root) titles_everywhere();
+}
+
 /* ---- menus ---------------------------------------------------------------------------------- */
 
 enum { M_SHELL = 1, M_REDRAW, M_UPDATE, M_ABOUT, M_LOADWB, M_QUIT, M_ICON_OPEN, M_ICON_INFO, M_DISK_INSERT, M_DISK_EJECT,
@@ -2630,7 +2664,8 @@ static void put_away(void)
     snapfail_end(&f, 0, "Put Away", NULL);
 }
 
-static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, desk_icon_at, leave_out, leftouts_check };
+static const ob_drop_env drop_env = { &look.scr, &root, drawers, &ndrawers, desk_icon_at, leave_out, leftouts_check,
+                                       say_title };
 
 static void drag_img_close(void)
 {
@@ -3759,7 +3794,7 @@ static int run(void)
             WaitIO((struct IORequest *)tr);
             /* 0.1.34: the picture still decoding two ticks on (4 seconds): at 0 (picture_hurry) */
             if (++picture_ticks == 2) picture_hurry();
-            if (root && make_title()) titles_everywhere();
+            if (root && make_title() && !title_held) titles_everywhere();
             if (root) mark_ours();                  /* 0.1.22: the dock's and Information windows opened since */
             if (!dic_notify) noicons_apply(ob_show_set(&show, deskicons_none()));   /* 0.1.37: no notify for it */
             if (!wb_down) native_tick();            /* 0.1.22: a page asked the Amiga to follow now; the menu item */
@@ -3786,6 +3821,8 @@ static int run(void)
             APTR ia = im->IAddress;
             WORD mx = im->MouseX, my = im->MouseY;
             GT_ReplyIMsg(im);
+            /* 0.1.44: words held in the title (say_title) go at the next click, in any of OpenBench's windows */
+            if (title_held && cl == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) title_release();
             if (root && win == root) {
                 if (!root_event(cl, code, qual, mx, my, secs, micros)) quit = 1;
                 continue;
@@ -3793,7 +3830,7 @@ static int run(void)
             for (i = 0; i < ndrawers; i++)
                 if (wb_drawer_window(drawers[i]) == win) {
                     if (!wb_drawer_event(drawers[i], cl, code, qual, ia, mx, my, secs, micros)) close_index(i);
-                    else if (cl == IDCMP_ACTIVEWINDOW) SetWindowTitles(win, (CONST_STRPTR)~0, (CONST_STRPTR)screen_title);
+                    else if (cl == IDCMP_ACTIVEWINDOW) SetWindowTitles(win, (CONST_STRPTR)~0, (CONST_STRPTR)title_now());
                     break;
                 }
         }
