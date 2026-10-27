@@ -1929,10 +1929,43 @@ static void run_wbstartup(void)
 /* what each drawer window was opened on, to open it again after a reset of the Workbench screen */
 static char drawer_paths[MAX_WINDOWS][256];
 
+/* 0.1.44: the drawer window showing path already (by its name, or another name for the same drawer: "SYS:" is
+ * "System:"), or -1. OS 3.2.3 opens a drawer once: a second double-click on it (lab t4-dnd, W151, 27 October 2026)
+ * opened no second window, the one there was made active. No DOS requester while it looks (a window's disk may be
+ * out of its drive). */
+static int drawer_open_at(const char *path)
+{
+    struct Process *me = (struct Process *)FindTask(NULL);
+    APTR was = me->pr_WindowPtr;
+    BPTR l, l2;
+    int i, at = -1;
+    for (i = 0; i < ndrawers && at < 0; i++)
+        if (!ci_cmp(wb_drawer_path(drawers[i]), path)) at = i;
+    if (at >= 0 || !ndrawers) return at;
+    me->pr_WindowPtr = (APTR)-1;
+    if ((l = Lock((CONST_STRPTR)path, ACCESS_READ))) {
+        for (i = 0; i < ndrawers && at < 0; i++)
+            if ((l2 = Lock((CONST_STRPTR)wb_drawer_path(drawers[i]), ACCESS_READ))) {
+                if (SameLock(l, l2) == LOCK_SAME) at = i;
+                UnLock(l2);
+            }
+        UnLock(l);
+    }
+    me->pr_WindowPtr = was;
+    return at;
+}
+
 static int open_drawer(const char *path)
 {
     wb_drawer *d;
+    int at;
     if (!root) return 0;                            /* the Workbench screen is being reset */
+    if ((at = drawer_open_at(path)) >= 0) {         /* 0.1.44: open already: that window, to the front and active */
+        struct Window *w = wb_drawer_window(drawers[at]);
+        WindowToFront(w);
+        ActivateWindow(w);
+        return 1;
+    }
     if (ndrawers >= MAX_WINDOWS || !(d = wb_drawer_open(&look, path))) {
         DisplayBeep(look.scr);
         return 0;
